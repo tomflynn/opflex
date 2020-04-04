@@ -24,5 +24,5 @@ before_script: sudo sh -c 'echo 0 > /proc/sys/net/ipv6/conf/all/disable_ipv6';
 script: bash ./.travis/travis-build.sh
 
 after_success:
-  - coveralls --exclude '/usr/include/.*' --exclude '/usr/local/include/.*' --exclude '.*/test/.*' --build-root agent-ovs
+  - coveralls --exclude-pattern '/usr/include/.*' --exclude-pattern '/usr/local/include/.*' --exclude-pattern '.*/test/.*' --build-root agent-ovs --root agent-ovs --gcov-options '\-lp'
 
