@@ -21,7 +21,7 @@ before_install:
   - pip install --user cpp-coveralls
 
 before_script: sudo sh -c 'echo 0 > /proc/sys/net/ipv6/conf/all/disable_ipv6';
-script: bash ./.travis/travis-build.sh
+script: bash ./.travis/travis-build.sh;
 
 after_success:
   - lcov --capture --directory . --output-file coverage-all.info --exclude '/usr/include*' --exclude '/usr/local/include/*' --exclude '*/test/*'
