@@ -13,9 +13,9 @@ addons:
       - autoconf
       - openjdk-8-jdk-headless
       - maven
-      - doxygen
       - texlive-font-utils
       - python-six
+      - lcov
 
 before_install:
   - pip install --user cpp-coveralls
