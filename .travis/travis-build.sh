@@ -37,16 +37,17 @@ popd
 
 git clone https://github.com/noironetworks/3rdparty-debian.git
 git clone https://github.com/jupp0r/prometheus-cpp.git
-cd prometheus-cpp \
+pushd prometheus-cpp
 git checkout 9effb90b0c266316358680cbf862a8564eb2c2d4
-git submodule init \
-git submodule update \
-git apply ../3rdparty-debian/prometheus/prometheus-cpp.patch
+git submodule init
+git submodule update
+git apply /3rdparty-debian/prometheus/prometheus-cpp.patch
 mkdir _build && cd _build
 cmake .. -DBUILD_SHARED_LIBS=ON &> /dev/null
 make $make_args &> /dev/null
 make install &> /dev/null
 mv /usr/local/lib64/libprometheus-cpp-* /usr/local/lib/
+popd
 
 pushd agent-ovs
 ./autogen.sh &> /dev/null
