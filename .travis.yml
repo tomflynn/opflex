@@ -16,6 +16,7 @@ addons:
       - texlive-font-utils
       - python-six
       - lcov
+      - cmake
 
 before_install:
   - pip install --user cpp-coveralls
