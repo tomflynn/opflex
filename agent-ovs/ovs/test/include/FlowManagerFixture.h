@@ -18,6 +18,8 @@
 #include "PacketInHandler.h"
 #include <opflexagent/logging.h>
 
+#include "IntFlowManager.h"
+#include "AccessFlowManager.h"
 #include <vector>
 #include <thread>
 #include <list>
@@ -26,7 +28,6 @@
 namespace opflexagent {
 
 class FlowManagerFixture : public ModbFixture {
-    typedef opflex::ofcore::OFConstants::OpflexElementMode opflex_elem_t;
 public:
     FlowManagerFixture(opflex_elem_t mode = opflex_elem_t::INVALID_MODE)
         : ModbFixture(mode), ctZoneManager(idGen),

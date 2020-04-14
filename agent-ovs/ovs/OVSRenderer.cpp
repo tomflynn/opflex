@@ -34,6 +34,7 @@ static const std::string ID_NMSPC_CONNTRACK("conntrack");
 static const boost::posix_time::milliseconds CLEANUP_INTERVAL(3*60*1000);
 
 #define PACKET_LOGGER_PIDDIR LOCALSTATEDIR"/lib/opflex-agent-ovs/pids"
+#define LOOPBACK "127.0.0.1"
 
 OVSRendererPlugin::OVSRendererPlugin() {
     /* No good way to redirect OVS logs to our logs, suppress them for now */
@@ -76,11 +77,11 @@ OVSRenderer::OVSRenderer(Agent& agent_)
       virtualDHCP(true), connTrack(true), ctZoneRangeStart(0),
       ctZoneRangeEnd(0), ifaceStatsEnabled(true), ifaceStatsInterval(0),
       contractStatsEnabled(true), contractStatsInterval(0),
-      serviceStatsEnabled(true), serviceStatsInterval(0),
+      serviceStatsFlowDisabled(false), serviceStatsEnabled(true), serviceStatsInterval(0),
       secGroupStatsEnabled(true), secGroupStatsInterval(0),
       tableDropStatsEnabled(true), tableDropStatsInterval(0),
       spanRenderer(agent_), netflowRenderer(agent_), started(false),
-      dropLogRemotePort(6081), pktLogger(pktLoggerIO, exporterIO) {
+      dropLogRemotePort(6081), dropLogLocalPort(50000), pktLogger(pktLoggerIO, exporterIO) {
 
 }
 
@@ -159,7 +160,7 @@ void OVSRenderer::start() {
         accessSwitchManager.registerStateHandler(&accessFlowManager);
         accessSwitchManager.start(accessBridgeName);
     }
-    intFlowManager.start();
+    intFlowManager.start(serviceStatsFlowDisabled);
     intFlowManager.registerModbListeners();
 
     if (accessBridgeName != "") {
@@ -230,12 +231,6 @@ void OVSRenderer::start() {
                                   this, error));
 
     if(!dropLogIntIface.empty() || !dropLogAccessIface.empty()) {
-        boost::system::error_code ec;
-        boost::asio::ip::address addr = boost::asio::ip::address::from_string(dropLogRemoteIp, ec);
-        if(ec) {
-            LOG(ERROR) << "PacketLogger: Failed to start:" << ec << "invalid address:" <<dropLogRemoteIp;
-            return;
-        }
         // Inform the io_service that we are about to become a daemon. The
         // io_service cleans up any internal resources, such as threads, that may
         // interfere with forking.
@@ -270,20 +265,12 @@ void OVSRenderer::start() {
         bool toSysLog;
         std::tie(log_level, toSysLog, log_file) = logParams;
         initLogging(log_level, toSysLog, log_file);
-        int ns_fd = open(dropLogNs.c_str(), O_RDONLY);
-        if(ns_fd < 0) {
-            LOG(ERROR) << "PacketLogger: Failed to open namespace "
-                       << dropLogNs << ":" << errno;
-            exit(1);
+        boost::system::error_code ec;
+        boost::asio::ip::address addr = boost::asio::ip::address::from_string(LOOPBACK, ec);
+        if(ec) {
+            LOG(ERROR) << "PacketLogger: Failed to convert address " << LOOPBACK;
         }
-
-        int err = setns(ns_fd, CLONE_NEWNET);
-        if(err) {
-            LOG(ERROR) << "PacketLogger: Failed to switch to namespace "
-                       << dropLogNs << ":" << err;
-            exit(1);
-        }
-        pktLogger.setAddress(addr, dropLogRemotePort);
+        pktLogger.setAddress(addr, dropLogLocalPort);
         pktLogger.setNotifSock(getAgent().getPacketEventNotifSock());
         PacketLogHandler::TableDescriptionMap tblDescMap;
         intSwitchManager.getForwardingTableList(tblDescMap);
@@ -291,7 +278,6 @@ void OVSRenderer::start() {
         accessSwitchManager.getForwardingTableList(tblDescMap);
         pktLogger.setAccBridgeTableDescription(tblDescMap);
         if(!pktLogger.startListener()) {
-            LOG(ERROR) << "PacketLogger: Failed to bind socket:" << errno;
             exit(1);
         }
 
@@ -329,6 +315,8 @@ void OVSRenderer::start() {
         client_thread.join();
         signal_thread.join();
         exit(0);
+    } else {
+        LOG(DEBUG) << "DropLog interfaces not configured.Skipping creation";
     }
 
     ovsdbConnection.reset(new OvsdbConnection());
@@ -412,6 +400,7 @@ void OVSRenderer::setProperties(const ptree& properties) {
     static const std::string ENCAP_IFACE("encap-iface");
     static const std::string REMOTE_IP("remote-ip");
     static const std::string REMOTE_PORT("remote-port");
+    static const std::string LOCAL_PORT("local-port");
     static const std::string INT_BR_IFACE("int-br-iface");
     static const std::string ACC_BR_IFACE("access-br-iface");
 
@@ -455,6 +444,8 @@ void OVSRenderer::setProperties(const ptree& properties) {
                                                     ".contract.enabled");
     static const std::string STATS_CONTRACT_INTERVAL("statistics"
                                                     ".contract.interval");
+    static const std::string STATS_SERVICE_FLOWDISABLED("statistics"
+                                                        ".service.flow-disabled");
     static const std::string STATS_SERVICE_ENABLED("statistics"
                                                   ".service.enabled");
     static const std::string STATS_SERVICE_INTERVAL("statistics"
@@ -520,9 +511,9 @@ void OVSRenderer::setProperties(const ptree& properties) {
     if(dropLogEncapGeneve) {
         dropLogIntIface = dropLogEncapGeneve.get().get<std::string>(INT_BR_IFACE, "");
         dropLogAccessIface = dropLogEncapGeneve.get().get<std::string>(ACC_BR_IFACE, "");
-        dropLogRemoteIp = dropLogEncapGeneve.get().get<std::string>(REMOTE_IP, "");
+        dropLogRemoteIp = dropLogEncapGeneve.get().get<std::string>(REMOTE_IP, "192.168.1.2");
         dropLogRemotePort = dropLogEncapGeneve.get().get<uint16_t>(REMOTE_PORT, 6081);
-        dropLogNs = dropLogEncapGeneve.get().get<std::string>(REMOTE_NAMESPACE, "/var/run/netns/DropLog");
+        dropLogLocalPort = dropLogEncapGeneve.get().get<uint16_t>(LOCAL_PORT, 50000);
     }
 
     virtualRouter = properties.get<bool>(VIRTUAL_ROUTER, true);
@@ -575,6 +566,7 @@ void OVSRenderer::setProperties(const ptree& properties) {
 
     ifaceStatsEnabled = properties.get<bool>(STATS_INTERFACE_ENABLED, true);
     contractStatsEnabled = properties.get<bool>(STATS_CONTRACT_ENABLED, true);
+    serviceStatsFlowDisabled = properties.get<bool>(STATS_SERVICE_FLOWDISABLED, false);
     serviceStatsEnabled = properties.get<bool>(STATS_SERVICE_ENABLED, true);
     secGroupStatsEnabled = properties.get<bool>(STATS_SECGROUP_ENABLED, true);
     ifaceStatsInterval = properties.get<long>(STATS_INTERFACE_INTERVAL, 30000);

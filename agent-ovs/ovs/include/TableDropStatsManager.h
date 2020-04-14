@@ -77,6 +77,7 @@ public:
 
     void handleTableDropStats(struct ofputil_flow_stats* fentry) override;
 
+
 private:
     //Drop Flow Counter States per table
     std::unordered_map<int,
@@ -225,9 +226,11 @@ public:
             accTableDropStatsMgr.registerConnection(accessConnection);
         }
     }
+
 private:
     IntTableDropStatsManager intTableDropStatsMgr;
     AccessTableDropStatsManager accTableDropStatsMgr;
+    friend class TableDropStatsManagerFixture;
 };
 
 } /* namespace opflexagent */

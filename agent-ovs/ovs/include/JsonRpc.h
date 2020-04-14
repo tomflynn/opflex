@@ -214,10 +214,12 @@ public:
     /**
      * create mirror
      * @param[in] uuid uuid of the bridge to add the mirror to.
-     * @param[in]  name name of mirror
+     * @param[in] name name of mirror
+     * @param[in] srcPorts source ports
+     * @param[in] dstPorts dest ports
      * @return bool true if created successfully, false otherwise.
      */
-    bool createMirror(const string& uuid, const string& name);
+    bool createMirror(const string& uuid, const string& name, const set<string>& srcPorts, const set<string>& dstPorts);
 
     /**
      * get port uuids from OVSDB
@@ -247,8 +249,7 @@ public:
      * @param[in] uuidMap map of port names to uuids
      * @param[out] entries list of port uuids
      */
-    static void populatePortUuids(set<string>& ports, map<string,
-                string>& uuidMap, set<tuple<string, string>>& entries);
+    static void populatePortUuids(const set<string>& ports, const map<string, string>& uuidMap, set<tuple<string, string>>& entries);
 
     /**
      * add an erspan port to the bridge
@@ -259,13 +260,6 @@ public:
     bool addErspanPort(const string& bridgeName, shared_ptr<erspan_ifc> port);
 
     /**
-     * add mirror data to in memory struct
-     * @param[in] name name of mirror
-     * @param[in] mir struct mirror
-     */
-    void addMirrorData(const string& name, const mirror& mir);
-
-     /**
      * createNetFlow
      * @param[in] brUuid uuid of the bridge to add the netflow to.
      * @param[in] target target of netflow
@@ -364,21 +358,6 @@ public:
      */
     bool isConnected();
 
-/*! macro to declare handlers */
-#define DECLARE_HANDLER(F) \
-        /** \
-         * F \
-         * @param[in] reqId request ID \
-         * @param[in] payload body of the response \
-         */ \
-        void F(uint64_t reqId, const rapidjson::Document& payload);
-    /*! declaration for  handleGetBridgeMirrorUuidResp */
-    DECLARE_HANDLER(handleGetBridgeMirrorUuidResp);
-    /*! declaration for handleAddMirrorToBridgeResp */
-    DECLARE_HANDLER(handleAddMirrorToBridgeResp);
-    /*! declaration for handleAddErspanPortResp */
-    DECLARE_HANDLER(handleAddErspanPortResp);
-
     /**
      * get rpc connection pointer
      * @return pointer to OVSDB connection
@@ -443,11 +422,6 @@ private:
 
     static void substituteSet(set<string>& s, const unordered_map<string, string>& portMap);
 
-    /**
-     * print mirror map values
-     */
-    static void printMirMap(const map<string, mirror>& mirMap);
-
     class Response {
     public:
         uint64_t reqId;
@@ -460,7 +434,6 @@ private:
     };
 
     bool responseReceived = false;
-    map<string, mirror> mirMap;
     const int WAIT_TIMEOUT = 10;
     OvsdbConnection* conn;
     shared_ptr<Response> pResp;

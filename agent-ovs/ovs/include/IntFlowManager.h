@@ -78,8 +78,9 @@ public:
 
     /**
      * Module start
+     * @param serviceStatsFlowDisabled toggle service stats flow creation based on agent config
      */
-    void start();
+    void start(bool serviceStatsFlowDisabled=false);
 
     /**
      * Installs listeners for receiving updates to MODB state.
@@ -508,6 +509,13 @@ public:
         }
         return true;
     }
+    /**
+     * Populate TableDescriptionMap for this FlowManager
+     * for use by drop counters.
+     * @param fwdTblDescr returned TableDescriptionMap
+     */
+    static void populateTableDescriptionMap(
+            SwitchManager::TableDescriptionMap &fwdTblDescr);
 private:
     /**
      * Write flows that are fixed and not related to any policy or
@@ -537,6 +545,14 @@ private:
      * @param uuid UUID of the changed service
      */
     void handleServiceUpdate(const std::string& uuid);
+
+    /**
+     * Compare and update snat & dnat flow tables due to changes in a
+     * service.
+     *
+     * @param uuid UUID of the changed service
+     */
+    void programServiceSnatDnatFlows(const std::string& uuid);
 
     /**
      * Update service stats flows for metric collection
@@ -571,21 +587,26 @@ private:
                                 const bool &is_svc,
                                 const bool &is_add);
 
+    typedef std::unordered_map<std::string, std::string> attr_map;
     /**
      * Clear svc counter and children stats
      *
-     * @param uuid The uuid of svc
+     * @param uuid      The uuid of svc
+     * @param attr_map  The attribute map of service
      */
-    void clearSvcStatsCounters(const std::string& uuid);
+    void clearSvcStatsCounters(const std::string& uuid,
+                               const attr_map& attr_map);
 
     /**
      * Clear svc-tgt counters
      *
      * @param uuid The uuid of svc
      * @param nhip The ip of svc-tgt
+     * @param attr_map  The attribute map of service
      */
     void clearSvcTgtStatsCounters(const std::string& uuid,
-                                  const std::string& nhip);
+                                  const std::string& nhip,
+                                  const attr_map& attr_map);
 
     /**
      * Clear podsvc counter objects
@@ -597,12 +618,12 @@ private:
     /*
      * Update svctgt counter objects
      */
-    typedef std::unordered_map<std::string, std::string> attr_map;
     void updateSvcTgtStatsCounters(const uint64_t &cookie,
                                    const bool &isAnyToSvc,
                                    const string& idStr,
                                    const uint64_t &pkts,
                                    const uint64_t &bytes,
+                                   const attr_map &svc_attr_map,
                                    const attr_map &ep_attr_map);
 
     /*
@@ -813,6 +834,7 @@ private:
     std::string dropLogIface;
     boost::asio::ip::address dropLogDst;
     uint16_t dropLogRemotePort;
+    bool serviceStatsFlowDisabled;
 
     /* Map containing ingress and egress cookie: Flows generated out
      * of same pod<-->svc uuid will use these cookies */
@@ -897,10 +919,6 @@ private:
      * Handle if the droplog port name is read later
      */
     void handleDropLogPortUpdate();
-    /**
-     * Populate table description map for use by drop counters
-     */
-    void populateTableDescriptionMap();
 
 };
 

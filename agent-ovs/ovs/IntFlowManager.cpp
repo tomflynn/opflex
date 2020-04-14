@@ -104,9 +104,11 @@ static const char* ID_NMSPC_L24CLASS_RULE = ID_NAMESPACES[4];
 static const char* ID_NMSPC_SVCSTATS      = ID_NAMESPACES[5];
 static const char* ID_NMSPC_SERVICE       = ID_NAMESPACES[6];
 
-void IntFlowManager::populateTableDescriptionMap() {
+
+
+void IntFlowManager::populateTableDescriptionMap(
+        SwitchManager::TableDescriptionMap &fwdTblDescr) {
     // Populate descriptions of flow tables
-    SwitchManager::TableDescriptionMap fwdTblDescr;
 #define TABLE_DESC(table_id, table_name, drop_reason) \
         fwdTblDescr.insert( \
                     std::make_pair(table_id, \
@@ -134,7 +136,6 @@ void IntFlowManager::populateTableDescriptionMap() {
     TABLE_DESC(OUT_TABLE_ID, "OUT_TABLE",
             "Derived output port missing/incorrect")
 #undef TABLE_DESC
-    switchManager.setForwardingTableList(fwdTblDescr);
 }
 
 IntFlowManager::IntFlowManager(Agent& agent_,
@@ -153,10 +154,13 @@ IntFlowManager::IntFlowManager(Agent& agent_,
     floodScope(FLOOD_DOMAIN), tunnelPortStr("4789"),
     virtualRouterEnabled(false), routerAdv(false),
     virtualDHCPEnabled(false), conntrackEnabled(false), dropLogRemotePort(0),
+    serviceStatsFlowDisabled(false),
     advertManager(agent, *this), isSyncing(false), stopping(false) {
     // set up flow tables
     switchManager.setMaxFlowTables(NUM_FLOW_TABLES);
-    populateTableDescriptionMap();
+    SwitchManager::TableDescriptionMap fwdTblDescr;
+    populateTableDescriptionMap(fwdTblDescr);
+    switchManager.setForwardingTableList(fwdTblDescr);
 
     memset(routerMac, 0, sizeof(routerMac));
     memset(dhcpMac, 0, sizeof(dhcpMac));
@@ -165,8 +169,11 @@ IntFlowManager::IntFlowManager(Agent& agent_,
     agent.getFramework().registerPeerStatusListener(this);
 }
 
-void IntFlowManager::start() {
-    LOG(DEBUG) << "Starting IntFlowManager";
+void IntFlowManager::start(bool serviceStatsFlowDisabled_) {
+    LOG(DEBUG) << "Starting IntFlowManager"
+               << " serviceStatsFlowDisabled: " << serviceStatsFlowDisabled_;
+    serviceStatsFlowDisabled = serviceStatsFlowDisabled_;
+
     // set up port mapper
     switchManager.getPortMapper().registerPortStatusListener(this);
     advertManager.setPortMapper(&switchManager.getPortMapper());
@@ -2165,6 +2172,14 @@ updateSvcStatsCounters (const uint64_t &cookie,
 {
     const std::lock_guard<mutex> lock(svcStatMutex);
 
+    // Additional safety for stats flows:
+    // Nothing must be reported from ServiceStatsManager
+    // if serviceStatsFlowDisabled=true, since the stats flows wont be created
+    // in the first place.
+    // If service stats collection is also disabled, we dont need this safety.
+    if (serviceStatsFlowDisabled)
+        return;
+
     boost::optional<std::string> str =
         idGen.getStringForId(ID_NMSPC_SVCSTATS, cookie);
     if (str == boost::none) {
@@ -2196,6 +2211,7 @@ updateSvcStatsCounters (const uint64_t &cookie,
                                   str.get(),
                                   newPktCount,
                                   newByteCount,
+                                  attr_map(),
                                   attr_map());
     }
 }
@@ -2271,6 +2287,7 @@ updateSvcTgtStatsCounters (const uint64_t &cookie,
                            const string& idStr,
                            const uint64_t &newPktCount,
                            const uint64_t &newByteCount,
+                           const attr_map &svcAttr,
                            const attr_map &epAttr)
 {
     Mutator mutator(agent.getFramework(), "policyelement");
@@ -2328,6 +2345,7 @@ updateSvcTgtStatsCounters (const uint64_t &cookie,
                                                      updPktCount,
                                                      opSvcTgt.get()->getTxbytes(0),
                                                      opSvcTgt.get()->getTxpackets(0),
+                                                     svcAttr,
                                                      epAttr,
                                                      epAttr.size()!=0?true:false);
         } else {
@@ -2337,6 +2355,7 @@ updateSvcTgtStatsCounters (const uint64_t &cookie,
                                                      opSvcTgt.get()->getRxpackets(0),
                                                      updByteCount,
                                                      updPktCount,
+                                                     svcAttr,
                                                      epAttr,
                                                      epAttr.size()!=0?true:false);
         }
@@ -2362,36 +2381,42 @@ updatePodSvcStatsCounters (const uint64_t &cookie,
         if (isEpToSvc) {
             auto pEpToSvc = su.get()->resolveGbpeEpToSvcCounter(
                                         agent.getUuid(), idStr);
-            if (!pEpToSvc) {
-                pEpToSvc = su.get()->addGbpeEpToSvcCounter(
-                                        agent.getUuid(), idStr);
-            }
-
-            auto oldPktCount = pEpToSvc.get()->getPackets(0);
-            auto oldByteCount = pEpToSvc.get()->getBytes(0);
-            pEpToSvc.get()->setPackets(oldPktCount + newPktCount)
-                           .setBytes(oldByteCount + newByteCount);
+            // Create mo and update attributes only during cfg update
             if (!newPktCount) {
+                if (!pEpToSvc) {
+                    pEpToSvc = su.get()->addGbpeEpToSvcCounter(
+                                       agent.getUuid(), idStr);
+                }
                 updatePodSvcStatsAttr<EpToSvcCounter>(pEpToSvc.get(),
                                                       epAttr,
                                                       svcAttr);
             }
+
+            if (pEpToSvc) {
+                auto oldPktCount = pEpToSvc.get()->getPackets(0);
+                auto oldByteCount = pEpToSvc.get()->getBytes(0);
+                pEpToSvc.get()->setPackets(oldPktCount + newPktCount)
+                               .setBytes(oldByteCount + newByteCount);
+            }
         } else {
             auto pSvcToEp = su.get()->resolveGbpeSvcToEpCounter(
                                         agent.getUuid(), idStr);
-            if (!pSvcToEp) {
-                pSvcToEp = su.get()->addGbpeSvcToEpCounter(
-                                        agent.getUuid(), idStr);
-            }
-
-            auto oldPktCount = pSvcToEp.get()->getPackets(0);
-            auto oldByteCount = pSvcToEp.get()->getBytes(0);
-            pSvcToEp.get()->setPackets(oldPktCount + newPktCount)
-                           .setBytes(oldByteCount + newByteCount);
+            // Create mo and update attributes only during cfg update
             if (!newPktCount) {
+                if (!pSvcToEp) {
+                    pSvcToEp = su.get()->addGbpeSvcToEpCounter(
+                                        agent.getUuid(), idStr);
+                }
                 updatePodSvcStatsAttr<SvcToEpCounter>(pSvcToEp.get(),
                                                       epAttr,
                                                       svcAttr);
+            }
+
+            if (pSvcToEp) {
+                auto oldPktCount = pSvcToEp.get()->getPackets(0);
+                auto oldByteCount = pSvcToEp.get()->getBytes(0);
+                pSvcToEp.get()->setPackets(oldPktCount + newPktCount)
+                               .setBytes(oldByteCount + newByteCount);
             }
         }
     }
@@ -2426,7 +2451,8 @@ void IntFlowManager::clearPodSvcStatsCounters (const std::string& uuid)
 // Reset svc-tgt counter stats, deletion of the object will be handled in
 // ServiceManager
 void IntFlowManager::clearSvcTgtStatsCounters (const std::string& svcUuid,
-                                               const std::string& nhipStr)
+                                               const std::string& nhipStr,
+                                               const attr_map& svcAttr)
 {
     using modelgbp::observer::SvcStatUniverse;
     Mutator mutator(agent.getFramework(), "policyelement");
@@ -2452,6 +2478,7 @@ void IntFlowManager::clearSvcTgtStatsCounters (const std::string& svcUuid,
         prometheusManager.addNUpdateSvcTargetCounter(svcUuid,
                                                      nhipStr,
                                                      0, 0, 0, 0,
+                                                     svcAttr,
                                                      attr_map(),
                                                      true);
 #endif
@@ -2461,7 +2488,8 @@ void IntFlowManager::clearSvcTgtStatsCounters (const std::string& svcUuid,
 
 // Reset svc counter stats, deletion of the object will be handled in
 // ServiceManager
-void IntFlowManager::clearSvcStatsCounters (const std::string& uuid)
+void IntFlowManager::clearSvcStatsCounters (const std::string& uuid,
+                                            const attr_map& svcAttr)
 {
     using modelgbp::observer::SvcStatUniverse;
     Mutator mutator(agent.getFramework(), "policyelement");
@@ -2489,6 +2517,7 @@ void IntFlowManager::clearSvcStatsCounters (const std::string& uuid)
                 prometheusManager.addNUpdateSvcTargetCounter(uuid,
                                                              nhip.get(),
                                                              0, 0, 0, 0,
+                                                             svcAttr,
                                                              attr_map(),
                                                              true);
 #endif
@@ -2519,6 +2548,10 @@ void IntFlowManager::updateSvcStatsFlows (const string& uuid,
                                           const bool& is_add)
 {
     const std::lock_guard<mutex> lock(svcStatMutex);
+
+    if (serviceStatsFlowDisabled)
+        return;
+
     updatePodSvcStatsFlows(uuid, is_svc, is_add);
     updateSvcTgtStatsFlows(uuid, is_svc, is_add);
 }
@@ -2549,15 +2582,40 @@ void IntFlowManager::updateSvcTgtStatsFlows (const string &uuid,
         [this] (const string &flow_uuid,
                 const string &svc_uuid) -> void {
         switchManager.clearFlows(flow_uuid, STATS_TABLE_ID);
-        clearSvcStatsCounters(svc_uuid);
+
+        // Idgen would have restored the ids during agent restart. If flows for this
+        // service needs to be removed, then free up the restored IDs as well.
+        ServiceManager& srvMgr = agent.getServiceManager();
+        shared_ptr<const Service> asWrapper = srvMgr.getService(svc_uuid);
+        if (asWrapper) {
+            const Service& as = *asWrapper;
+            for (auto const& sm : as.getServiceMappings()) {
+                for (const string& nhip : sm.getNextHopIPs()) {
+                    idGen.erase(ID_NMSPC_SVCSTATS, "antosvc:"+flow_uuid+":"+nhip);
+                    idGen.erase(ID_NMSPC_SVCSTATS, "svctoan:"+flow_uuid+":"+nhip);
+                    if (svc_nh_map.find(svc_uuid) != svc_nh_map.end())
+                        svc_nh_map[svc_uuid].erase(nhip);
+                }
+            }
+            clearSvcStatsCounters(svc_uuid, as.getAttributes());
+        } else {
+            // Note: the only time asWrapper will be null is when service is
+            // removed. In such a case, the observer mo and prom metrics
+            // would have been deleted from ServiceManager already. The below
+            // call will be a no-op.
+            clearSvcStatsCounters(svc_uuid, attr_map());
+        }
+
+        // Above should have freed up all the ids. But during svc delete, asWrapper will be
+        // null. Use svc_nh_map to free up in that case.
         if (svc_nh_map.find(svc_uuid) != svc_nh_map.end()) {
             for (const string& nhip : svc_nh_map[svc_uuid]) {
                 idGen.erase(ID_NMSPC_SVCSTATS, "antosvc:"+flow_uuid+":"+nhip);
                 idGen.erase(ID_NMSPC_SVCSTATS, "svctoan:"+flow_uuid+":"+nhip);
             }
-            svc_nh_map[svc_uuid].clear();
-            svc_nh_map.erase(svc_uuid);
         }
+        svc_nh_map[svc_uuid].clear();
+        svc_nh_map.erase(svc_uuid);
     };
 
     // build this set to detect if any svc-tgt state needs to be removed
@@ -2570,6 +2628,7 @@ void IntFlowManager::updateSvcTgtStatsFlows (const string &uuid,
                                          const string &svc_uuid,
                                          const string &nhipStr,
                                          const Service::ServiceMapping &sm,
+                                         const attr_map &svcAttr,
                                          const attr_map &epAttr) -> void {
 
         boost::system::error_code ec;
@@ -2620,8 +2679,8 @@ void IntFlowManager::updateSvcTgtStatsFlows (const string &uuid,
                    << " cookieEg: " << cookieIdEg;
 
         // updates to take care of pod name and namespace change
-        updateSvcTgtStatsCounters(cookieIdIg, true, ingStr, 0, 0, epAttr);
-        updateSvcTgtStatsCounters(cookieIdEg, false, egrStr, 0, 0, epAttr);
+        updateSvcTgtStatsCounters(cookieIdIg, true, ingStr, 0, 0, svcAttr, epAttr);
+        updateSvcTgtStatsCounters(cookieIdEg, false, egrStr, 0, 0, svcAttr, epAttr);
 
         FlowBuilder anyToSvc; // to service stats
         FlowBuilder svcToAny; // from service stats
@@ -2630,23 +2689,23 @@ void IntFlowManager::updateSvcTgtStatsFlows (const string &uuid,
         matchActionServiceProto(svcToAny, proto, sm, false, false);
 
         if (nhAddr.is_v4()) {
-            anyToSvc.priority(98).ethType(eth::type::IP)
+            anyToSvc.priority(97).ethType(eth::type::IP)
                     .ipDst(nhAddr)
                     .flags(OFPUTIL_FF_SEND_FLOW_REM)
                     .cookie(ovs_htonll(cookieIdIg))
                     .action().go(OUT_TABLE_ID);
-            svcToAny.priority(98).ethType(eth::type::IP)
+            svcToAny.priority(97).ethType(eth::type::IP)
                     .ipSrc(nhAddr)
                     .flags(OFPUTIL_FF_SEND_FLOW_REM)
                     .cookie(ovs_htonll(cookieIdEg))
                     .action().go(OUT_TABLE_ID);
         } else {
-            anyToSvc.priority(98).ethType(eth::type::IPV6)
+            anyToSvc.priority(97).ethType(eth::type::IPV6)
                     .ipDst(nhAddr)
                     .flags(OFPUTIL_FF_SEND_FLOW_REM)
                     .cookie(ovs_htonll(cookieIdIg))
                     .action().go(OUT_TABLE_ID);
-            svcToAny.priority(98).ethType(eth::type::IPV6)
+            svcToAny.priority(97).ethType(eth::type::IPV6)
                     .ipSrc(nhAddr)
                     .flags(OFPUTIL_FF_SEND_FLOW_REM)
                     .cookie(ovs_htonll(cookieIdEg))
@@ -2691,6 +2750,7 @@ void IntFlowManager::updateSvcTgtStatsFlows (const string &uuid,
                     svcTgtFlowAddExpr("svc-tgt:"+uuid,
                                       uuid,
                                       nhipstr, sm,
+                                      as.getAttributes(),
                                       itr->second->getAttributes());
                 }
             }
@@ -2712,7 +2772,7 @@ void IntFlowManager::updateSvcTgtStatsFlows (const string &uuid,
                                << " nh_ip: " << *nh_itr;
                     idGen.erase(ID_NMSPC_SVCSTATS, "antosvc:svc-tgt:"+uuid+":"+*nh_itr);
                     idGen.erase(ID_NMSPC_SVCSTATS, "svctoan:svc-tgt:"+uuid+":"+*nh_itr);
-                    clearSvcTgtStatsCounters(uuid, *nh_itr);
+                    clearSvcTgtStatsCounters(uuid, *nh_itr, as.getAttributes());
                     nh_itr = svc_nh_map[uuid].erase(nh_itr);
                 } else {
                     nh_itr++;
@@ -2731,8 +2791,15 @@ void IntFlowManager::updateSvcTgtStatsFlows (const string &uuid,
         // If the EP became local, then stats flows need to be added
         // If new IP is added, then stats flows will be added
         // If an IP is deleted, then stats flows will be deleted
-        for (const string& svcUuid : svcUuids)
+        for (const string& svcUuid : svcUuids) {
             updateSvcTgtStatsFlows(svcUuid, true, true);
+            // If EP IP is added, and happens to be NH of this service, then cookie needs to be updated
+            // If EP IP is deleted, and happens to be NH of this service, then cookie needs to be removed
+            // If EP IP is modified:
+            //  - if it became NH of this service, then cookie needs to be updated
+            //  - if it moved away from being NH of this service, then cookie needs to be removed
+            programServiceSnatDnatFlows(svcUuid);
+        }
     }
 
     for (auto &p : uuid_felist_map)
@@ -3047,6 +3114,242 @@ void IntFlowManager::updatePodSvcStatsFlows (const string &uuid,
         switchManager.writeFlow(p.first, STATS_TABLE_ID, p.second);
 }
 
+void IntFlowManager::programServiceSnatDnatFlows (const string& uuid)
+{
+    LOG(DEBUG) << "Updating snat dnat flows for service " << uuid;
+
+    ServiceManager& srvMgr = agent.getServiceManager();
+    shared_ptr<const Service> asWrapper = srvMgr.getService(uuid);
+
+    if (!asWrapper || !asWrapper->getDomainURI()) {
+        return;
+    }
+    const Service& as = *asWrapper;
+    FlowEntryList serviceRevFlows;
+    FlowEntryList serviceNextHopFlows;
+
+    boost::system::error_code ec;
+
+    uint32_t ofPort = OFPP_NONE;
+    const optional<string>& ofPortName = as.getInterfaceName();
+    if (ofPortName)
+        ofPort = switchManager.getPortMapper().FindPort(ofPortName.get());
+
+    optional<shared_ptr<RoutingDomain > > rd =
+        RoutingDomain::resolve(agent.getFramework(),
+                               as.getDomainURI().get());
+
+    if (rd) {
+        uint8_t smacAddr[6];
+        const uint8_t* macAddr = smacAddr;
+        if (as.getServiceMAC()) {
+            as.getServiceMAC().get().toUIntArray(smacAddr);
+        } else {
+            macAddr = getRouterMacAddr();
+        }
+
+        uint32_t rdId = getId(RoutingDomain::CLASS_ID, as.getDomainURI().get());
+        uint32_t ctMark = idGen.getId(ID_NMSPC_SERVICE, uuid);
+        if (as.getInterfaceName())
+            ctMark |= 1 << 31;
+
+        for (auto const& sm : as.getServiceMappings()) {
+            if (!sm.getServiceIP())
+                continue;
+
+            uint16_t zoneId = -1;
+            if (conntrackEnabled && sm.isConntrackMode()) {
+                zoneId = ctZoneManager.getId(as.getDomainURI()->toString());
+                if (zoneId == static_cast<uint16_t>(-1))
+                    LOG(ERROR) << "Could not allocate connection tracking"
+                               << " zone for "
+                               << as.getDomainURI().get();
+            }
+
+            address serviceAddr =
+                address::from_string(sm.getServiceIP().get(), ec);
+            if (ec) {
+                LOG(WARNING) << "Invalid service IP: "
+                             << sm.getServiceIP().get()
+                             << ": " << ec.message();
+                continue;
+            }
+
+            vector<address> nextHopAddrs;
+            for (const string& ipstr : sm.getNextHopIPs()) {
+                auto nextHopAddr = address::from_string(ipstr, ec);
+                if (ec) {
+                    LOG(WARNING) << "Invalid service next hop IP: "
+                                 << ipstr << ": " << ec.message();
+                } else {
+                    nextHopAddrs.push_back(nextHopAddr);
+                }
+            }
+
+            uint8_t proto = 0;
+            if (sm.getServiceProto()) {
+                const string& protoStr = sm.getServiceProto().get();
+                if ("udp" == protoStr)
+                    proto = 17;
+                else
+                    proto = 6;
+            }
+
+
+            uint16_t link = 0;
+            for (const address& nextHopAddr : nextHopAddrs) {
+                {
+                    FlowBuilder ipMap;
+                    matchDestDom(ipMap, 0, rdId);
+                    matchActionServiceProto(ipMap, proto, sm, true, true);
+                    ipMap.ipDst(serviceAddr);
+
+                    // use the first address as a "default" so that
+                    // there is no transient case where there is no
+                    // match while flows are updated.
+                    if (link == 0) {
+                        ipMap.priority(99);
+                    } else {
+                        ipMap.priority(100)
+                            .reg(7, link);
+                    }
+                    ipMap.action().ipDst(nextHopAddr).decTtl();
+
+                    if (as.getServiceMode() == Service::LOADBALANCER) {
+                        // For LB: save v4 service address to reg8
+                        // Save v6 addr in regs 8 to 11
+                        if (serviceAddr.is_v4()) {
+                            ipMap.action()
+                                .reg(MFF_REG8, serviceAddr.to_v4().to_ulong());
+                        } else {
+                            uint32_t pAddr[4];
+                            in6AddrToLong(serviceAddr, &pAddr[0]);
+                            ipMap.action()
+                                .reg(MFF_REG8, pAddr[0])
+                                .reg(MFF_REG9, pAddr[1])
+                                .reg(MFF_REG10, pAddr[2])
+                                .reg(MFF_REG11, pAddr[3]);
+                        }
+
+                        if (zoneId != static_cast<uint16_t>(-1)) {
+                            uint32_t metav = as.getInterfaceName()
+                                ? flow::meta::FROM_SERVICE_INTERFACE
+                                : 0;
+
+                            ipMap.metadata(metav,
+                                           flow::meta::FROM_SERVICE_INTERFACE);
+
+                            ActionBuilder setMark;
+                            setMark.reg(MFF_CT_MARK, ctMark);
+                            ipMap.action()
+                                .conntrack(ActionBuilder::CT_COMMIT,
+                                           static_cast<mf_field_id>(0),
+                                           zoneId, 0xff, 0, setMark);
+                        }
+
+                        // If a cookie was already allocated by updateSvcTgtStatsFlows(), then
+                        // use it.
+                        if (!serviceStatsFlowDisabled) {
+                            const string& ingStr = "antosvc:svc-tgt:"+uuid+":"+nextHopAddr.to_string();
+                            uint32_t cookieIdIg = idGen.getIdNoAlloc(ID_NMSPC_SVCSTATS, ingStr);
+                            if (cookieIdIg != static_cast<uint32_t>(-1)) {
+                                ipMap.cookie(ovs_htonll((uint64_t)cookieIdIg))
+                                     .flags(OFPUTIL_FF_SEND_FLOW_REM);
+                            }
+                        }
+
+                        ipMap.action()
+                            .metadata(flow::meta::ROUTED, flow::meta::ROUTED)
+                            .go(ROUTE_TABLE_ID);
+                    } else if (as.getServiceMode() == Service::LOCAL_ANYCAST &&
+                               ofPort != OFPP_NONE) {
+                        ipMap.action().output(ofPort);
+                    }
+
+                    ipMap.build(serviceNextHopFlows);
+                }
+                if (as.getServiceMode() == Service::LOADBALANCER) {
+                    // For load balanced services reverse traffic is
+                    // handled with normal policy semantics
+                    if (zoneId != static_cast<uint16_t>(-1)) {
+                        if (encapType == ENCAP_VLAN) {
+                            // traffic from the uplink will originally
+                            // have had a vlan tag that was stripped
+                            // in the source table.  Restore the tag
+                            // before running through the conntrack
+                            // table to ensure we can property rebuild
+                            // the state when the packet comes back.
+                            flowRevMapCt(serviceRevFlows, 101,
+                                         sm, nextHopAddr, rdId, zoneId, proto,
+                                         getTunnelPort(), ENCAP_VLAN);
+                        }
+                        flowRevMapCt(serviceRevFlows, 100,
+                                     sm, nextHopAddr, rdId, zoneId, proto,
+                                     0, ENCAP_NONE);
+                    }
+                    {
+                        FlowBuilder ipRevMap;
+                        matchDestDom(ipRevMap, 0, rdId);
+                        matchActionServiceProto(ipRevMap, proto, sm,
+                                                false, true);
+
+                        // If a cookie was already allocated by updateSvcTgtStatsFlows(), then
+                        // use it.
+                        if (!serviceStatsFlowDisabled) {
+                            const string& egrStr = "svctoan:svc-tgt:"+uuid+":"+nextHopAddr.to_string();
+                            uint32_t cookieIdEg = idGen.getIdNoAlloc(ID_NMSPC_SVCSTATS, egrStr);
+                            if (cookieIdEg != static_cast<uint32_t>(-1)) {
+                                ipRevMap.cookie(ovs_htonll((uint64_t)cookieIdEg))
+                                        .flags(OFPUTIL_FF_SEND_FLOW_REM);
+                            }
+                        }
+                        ipRevMap.priority(100)
+                            .ipSrc(nextHopAddr)
+                            .action()
+                            .ethSrc(macAddr)
+                            .ipSrc(serviceAddr)
+                            .decTtl();
+                        if (zoneId != static_cast<uint16_t>(-1)) {
+                            ipRevMap
+                                .conntrackState(FlowBuilder::CT_TRACKED |
+                                                FlowBuilder::CT_ESTABLISHED,
+                                                FlowBuilder::CT_TRACKED |
+                                                FlowBuilder::CT_ESTABLISHED |
+                                                FlowBuilder::CT_INVALID |
+                                                FlowBuilder::CT_NEW);
+
+                            ipRevMap.ctMark(ctMark);
+                        }
+                        if (!as.getInterfaceName()) {
+                            ipRevMap.action()
+                                .metadata(flow::meta::ROUTED,
+                                          flow::meta::ROUTED)
+                                .go(BRIDGE_TABLE_ID);
+                        } else if (ofPort != OFPP_NONE) {
+                            if (as.getIfaceVlan()) {
+                                ipRevMap.action()
+                                    .pushVlan()
+                                    .setVlanVid(as.getIfaceVlan().get());
+                            }
+                            ipRevMap.action()
+                                .ethDst(getRouterMacAddr())
+                                .output(ofPort);
+                        }
+                        ipRevMap.build(serviceRevFlows);
+                    }
+                }
+
+                link += 1;
+            }
+
+        }
+    }
+
+    switchManager.writeFlow(uuid, SERVICE_REV_TABLE_ID, serviceRevFlows);
+    switchManager.writeFlow(uuid, SERVICE_NEXTHOP_TABLE_ID,
+                            serviceNextHopFlows);
+}
+
 void IntFlowManager::handleServiceUpdate(const string& uuid) {
     LOG(DEBUG) << "Updating service " << uuid;
 
@@ -3068,9 +3371,7 @@ void IntFlowManager::handleServiceUpdate(const string& uuid) {
 
     FlowEntryList secFlows;
     FlowEntryList bridgeFlows;
-    FlowEntryList serviceRevFlows;
     FlowEntryList serviceDstFlows;
-    FlowEntryList serviceNextHopFlows;
 
     boost::system::error_code ec;
 
@@ -3183,131 +3484,6 @@ void IntFlowManager::handleServiceUpdate(const string& uuid) {
                 }
 
                 serviceDest.build(bridgeFlows);
-            }
-
-            uint16_t link = 0;
-            for (const address& nextHopAddr : nextHopAddrs) {
-                {
-                    FlowBuilder ipMap;
-                    matchDestDom(ipMap, 0, rdId);
-                    matchActionServiceProto(ipMap, proto, sm, true, true);
-                    ipMap.ipDst(serviceAddr);
-
-                    // use the first address as a "default" so that
-                    // there is no transient case where there is no
-                    // match while flows are updated.
-                    if (link == 0) {
-                        ipMap.priority(99);
-                    } else {
-                        ipMap.priority(100)
-                            .reg(7, link);
-                    }
-                    ipMap.action().ipDst(nextHopAddr).decTtl();
-
-                    if (as.getServiceMode() == Service::LOADBALANCER) {
-                        // For LB: save v4 service address to reg8
-                        // Save v6 addr in regs 8 to 11
-                        if (serviceAddr.is_v4()) {
-                            ipMap.action()
-                                .reg(MFF_REG8, serviceAddr.to_v4().to_ulong());
-                        } else {
-                            uint32_t pAddr[4];
-                            in6AddrToLong(serviceAddr, &pAddr[0]);
-                            ipMap.action()
-                                .reg(MFF_REG8, pAddr[0])
-                                .reg(MFF_REG9, pAddr[1])
-                                .reg(MFF_REG10, pAddr[2])
-                                .reg(MFF_REG11, pAddr[3]);
-                        }
-
-                        if (zoneId != static_cast<uint16_t>(-1)) {
-                            uint32_t metav = as.getInterfaceName()
-                                ? flow::meta::FROM_SERVICE_INTERFACE
-                                : 0;
-
-                            ipMap.metadata(metav,
-                                           flow::meta::FROM_SERVICE_INTERFACE);
-
-                            ActionBuilder setMark;
-                            setMark.reg(MFF_CT_MARK, ctMark);
-                            ipMap.action()
-                                .conntrack(ActionBuilder::CT_COMMIT,
-                                           static_cast<mf_field_id>(0),
-                                           zoneId, 0xff, 0, setMark);
-                        }
-
-                        ipMap.action()
-                            .metadata(flow::meta::ROUTED, flow::meta::ROUTED)
-                            .go(ROUTE_TABLE_ID);
-                    } else if (as.getServiceMode() == Service::LOCAL_ANYCAST &&
-                               ofPort != OFPP_NONE) {
-                        ipMap.action().output(ofPort);
-                    }
-
-                    ipMap.build(serviceNextHopFlows);
-                }
-                if (as.getServiceMode() == Service::LOADBALANCER) {
-                    // For load balanced services reverse traffic is
-                    // handled with normal policy semantics
-                    if (zoneId != static_cast<uint16_t>(-1)) {
-                        if (encapType == ENCAP_VLAN) {
-                            // traffic from the uplink will originally
-                            // have had a vlan tag that was stripped
-                            // in the source table.  Restore the tag
-                            // before running through the conntrack
-                            // table to ensure we can property rebuild
-                            // the state when the packet comes back.
-                            flowRevMapCt(serviceRevFlows, 101,
-                                         sm, nextHopAddr, rdId, zoneId, proto,
-                                         getTunnelPort(), ENCAP_VLAN);
-                        }
-                        flowRevMapCt(serviceRevFlows, 100,
-                                     sm, nextHopAddr, rdId, zoneId, proto,
-                                     0, ENCAP_NONE);
-                    }
-                    {
-                        FlowBuilder ipRevMap;
-                        matchDestDom(ipRevMap, 0, rdId);
-                        matchActionServiceProto(ipRevMap, proto, sm,
-                                                false, true);
-
-                        ipRevMap.priority(100)
-                            .ipSrc(nextHopAddr)
-                            .action()
-                            .ethSrc(macAddr)
-                            .ipSrc(serviceAddr)
-                            .decTtl();
-                        if (zoneId != static_cast<uint16_t>(-1)) {
-                            ipRevMap
-                                .conntrackState(FlowBuilder::CT_TRACKED |
-                                                FlowBuilder::CT_ESTABLISHED,
-                                                FlowBuilder::CT_TRACKED |
-                                                FlowBuilder::CT_ESTABLISHED |
-                                                FlowBuilder::CT_INVALID |
-                                                FlowBuilder::CT_NEW);
-
-                            ipRevMap.ctMark(ctMark);
-                        }
-                        if (!as.getInterfaceName()) {
-                            ipRevMap.action()
-                                .metadata(flow::meta::ROUTED,
-                                          flow::meta::ROUTED)
-                                .go(BRIDGE_TABLE_ID);
-                        } else if (ofPort != OFPP_NONE) {
-                            if (as.getIfaceVlan()) {
-                                ipRevMap.action()
-                                    .pushVlan()
-                                    .setVlanVid(as.getIfaceVlan().get());
-                            }
-                            ipRevMap.action()
-                                .ethDst(getRouterMacAddr())
-                                .output(ofPort);
-                        }
-                        ipRevMap.build(serviceRevFlows);
-                    }
-                }
-
-                link += 1;
             }
 
             if (ofPort != OFPP_NONE) {
@@ -3424,6 +3600,26 @@ void IntFlowManager::handleServiceUpdate(const string& uuid) {
                 .go(BRIDGE_TABLE_ID);
             svcIface.build(secFlows);
 
+            FlowBuilder svcArp;
+            svcArp.priority(90)
+                .inPort(ofPort)
+                .ethType(eth::type::ARP)
+                .proto(arp::op::REQUEST)
+                .ethDst(packets::MAC_ADDR_BROADCAST);
+            if (as.getIfaceVlan()) {
+                svcArp.vlan(as.getIfaceVlan().get());
+                svcArp.action().popVlan();
+            }
+            svcArp.action()
+                .reg(MFF_REG0, proxyVnid)
+                .reg(MFF_REG6, rdId)
+                .metadata(flow::meta::POLICY_APPLIED |
+                          flow::meta::FROM_SERVICE_INTERFACE,
+                          flow::meta::POLICY_APPLIED|
+                          flow::meta::FROM_SERVICE_INTERFACE)
+                .go(BRIDGE_TABLE_ID);
+            svcArp.build(secFlows);
+
             if (as.getIfaceIP()) {
                 // Reply to ARP/ND requests for the iface address
                 address ifaceAddr =
@@ -3443,11 +3639,9 @@ void IntFlowManager::handleServiceUpdate(const string& uuid) {
         }
     }
 
+    programServiceSnatDnatFlows(uuid);
     switchManager.writeFlow(uuid, SEC_TABLE_ID, secFlows);
     switchManager.writeFlow(uuid, BRIDGE_TABLE_ID, bridgeFlows);
-    switchManager.writeFlow(uuid, SERVICE_REV_TABLE_ID, serviceRevFlows);
-    switchManager.writeFlow(uuid, SERVICE_NEXTHOP_TABLE_ID,
-                            serviceNextHopFlows);
     switchManager.writeFlow(uuid, SERVICE_DST_TABLE_ID, serviceDstFlows);
 }
 
