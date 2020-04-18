@@ -15,7 +15,6 @@
 #include <set>
 #include <map>
 #include <tuple>
-#include <memory>
 #include <regex>
 #include <string>
 #include <rapidjson/document.h>
@@ -70,10 +69,8 @@ bool JsonRpc::createNetFlow(const string& brUuid, const string& target, const in
     tdSet = TupleDataSet(tuples);
     msg2.rows.emplace("netflow", tdSet);
 
-    uint64_t reqId = getNextId();
     const list<JsonRpcTransactMessage> requests = {msg1, msg2};
-
-    if (!sendRequestAndAwaitResponse(requests, reqId)) {
+    if (!sendRequestAndAwaitResponse(requests)) {
         LOG(DEBUG) << "Error sending message";
         return false;
     }
@@ -105,10 +102,8 @@ bool JsonRpc::createIpfix(const string& brUuid, const string& target, const int&
     tdSet = TupleDataSet(tuples);
     msg2.rows.emplace("ipfix", tdSet);
 
-    uint64_t reqId = getNextId();
     const list<JsonRpcTransactMessage> requests = {msg1, msg2};
-
-    if (!sendRequestAndAwaitResponse(requests, reqId)) {
+    if (!sendRequestAndAwaitResponse(requests)) {
         LOG(DEBUG) << "Error sending message";
         return false;
     }
@@ -126,10 +121,8 @@ bool JsonRpc::deleteNetFlow(const string& brName) {
     TupleDataSet tdSet(tuples, "set");
     msg1.rows.emplace("netflow", tdSet);
 
-    uint64_t reqId = getNextId();
     list<JsonRpcTransactMessage> requests = {msg1};
-
-    if (!sendRequestAndAwaitResponse(requests, reqId)) {
+    if (!sendRequestAndAwaitResponse(requests)) {
         LOG(DEBUG) << "Error sending message";
         return false;
     }
@@ -148,10 +141,8 @@ bool JsonRpc::deleteIpfix(const string& brName) {
     TupleDataSet tdSet(tuples, "set");
     msg1.rows.emplace("ipfix", tdSet);
 
-    uint64_t reqId = getNextId();
     const list<JsonRpcTransactMessage> requests = {msg1};
-
-    if (!sendRequestAndAwaitResponse(requests, reqId)) {
+    if (!sendRequestAndAwaitResponse(requests)) {
         LOG(DEBUG) << "Error sending message";
         return false;
     }
@@ -204,10 +195,8 @@ bool JsonRpc::updateBridgePorts(tuple<string,set<string>> ports,
     TupleDataSet tdSet(tuples, "set");
     msg1.rows.emplace("ports", tdSet);
 
-    uint64_t reqId = getNextId();
     const list<JsonRpcTransactMessage> requests = {msg1};
-
-    if (!sendRequestAndAwaitResponse(requests, reqId)) {
+    if (!sendRequestAndAwaitResponse(requests)) {
         LOG(DEBUG) << "Error sending message";
         return false;
     }
@@ -283,10 +272,8 @@ bool JsonRpc::getBridgePortList(const string& bridge, BrPortResult& res) {
     msg1.conditions = condSet;
     msg1.columns.emplace("ports");
     msg1.columns.emplace("_uuid");
-    uint64_t reqId = getNextId();
     const list<JsonRpcTransactMessage> requests = {msg1};
-
-    if (!sendRequestAndAwaitResponse(requests, reqId)) {
+    if (!sendRequestAndAwaitResponse(requests)) {
         LOG(DEBUG) << "Error sending message";
         return false;
     }
@@ -296,10 +283,8 @@ bool JsonRpc::getBridgePortList(const string& bridge, BrPortResult& res) {
 
 bool JsonRpc::getOvsdbMirrorConfig(mirror& mir) {
     JsonRpcTransactMessage msg1(OvsdbOperation::SELECT, OvsdbTable::MIRROR);
-    uint64_t reqId = getNextId();
     const list<JsonRpcTransactMessage> requests1 = {msg1};
-
-    if (!sendRequestAndAwaitResponse(requests1, reqId)) {
+    if (!sendRequestAndAwaitResponse(requests1)) {
         LOG(DEBUG) << "Error sending message";
         return false;
     }
@@ -316,10 +301,8 @@ bool JsonRpc::getOvsdbMirrorConfig(mirror& mir) {
     JsonRpcTransactMessage msg2(OvsdbOperation::SELECT, OvsdbTable::PORT);
     msg2.columns.emplace("name");
     msg2.columns.emplace("_uuid");
-    reqId = getNextId();
     const list<JsonRpcTransactMessage> requests2 = {msg2};
-
-    if (!sendRequestAndAwaitResponse(requests2, reqId)) {
+    if (!sendRequestAndAwaitResponse(requests2)) {
         LOG(DEBUG) << "Error sending message";
         return false;
     }
@@ -335,7 +318,7 @@ bool JsonRpc::getOvsdbMirrorConfig(mirror& mir) {
     return true;
 }
 
-bool JsonRpc::getErspanIfcParams(shared_ptr<erspan_ifc>& pIfc) {
+bool JsonRpc::getErspanIfcParams(erspan_ifc& pIfc) {
     // for ERSPAN port get IP address
     JsonRpcTransactMessage msg1(OvsdbOperation::SELECT, OvsdbTable::INTERFACE);
     tuple<string, string, string> cond1("name", "==", ERSPAN_PORT_NAME);
@@ -344,10 +327,8 @@ bool JsonRpc::getErspanIfcParams(shared_ptr<erspan_ifc>& pIfc) {
     msg1.conditions = condSet;
     msg1.columns.emplace("options");
 
-    uint64_t reqId = getNextId();
-    list<JsonRpcTransactMessage> requests;
-
-    if (!sendRequestAndAwaitResponse(requests, reqId)) {
+    list<JsonRpcTransactMessage> requests = {msg1};
+    if (!sendRequestAndAwaitResponse(requests)) {
         LOG(DEBUG) << "Error sending message";
         return false;
     }
@@ -355,7 +336,6 @@ bool JsonRpc::getErspanIfcParams(shared_ptr<erspan_ifc>& pIfc) {
         LOG(DEBUG) << "failed to get ERSPAN options";
         return false;
     }
-
     return true;
 }
 
@@ -424,8 +404,7 @@ bool JsonRpc::getPortList(const uint64_t reqId, const Document& payload, unorder
     return true;
 }
 
-
-bool JsonRpc::getErspanOptions(const uint64_t reqId, const Document& payload, shared_ptr<erspan_ifc>& pIfc) {
+bool JsonRpc::getErspanOptions(const uint64_t reqId, const Document& payload, erspan_ifc& pIfc) {
     if (!payload.IsArray()) {
         LOG(DEBUG) << "payload is not an array";
         return false;
@@ -450,28 +429,30 @@ bool JsonRpc::getErspanOptions(const uint64_t reqId, const Document& payload, sh
         auto ver = options.find("erspan_ver");
         if (ver != options.end()) {
             if (ver->second == "1") {
-                pIfc.reset(new erspan_ifc_v1);
-                if (options.find("erspan_idx") != options.end())
-                    static_pointer_cast<erspan_ifc_v1>(pIfc)->erspan_idx= stoi(options["erspan_idx"]);
-            } else  if (ver->second == "2") {
-                pIfc.reset(new erspan_ifc_v2);
-                if (options.find("erspan_hwid") != options.end())
-                    static_pointer_cast<erspan_ifc_v2>(pIfc)->erspan_hw_id = stoi(options["erspan_hwid"]);
-                if (options.find("erspan_dir") != options.end())
-                    static_pointer_cast<erspan_ifc_v2>(pIfc)->erspan_dir = stoi(options["erspan_dir"]);
-            }
-
-            if (pIfc) {
-                if (options.find("key") != options.end())
-                    pIfc->key = stoi(options["key"]);
-                pIfc->erspan_ver = stoi(ver->second);
-                if (options.find("remote_ip") != options.end())
-                    pIfc->remote_ip = options["remote_ip"];
+                erspan_ifc_v1 params = erspan_ifc_v1();
+                if (options.find("erspan_idx") != options.end()) {
+                    params.erspan_idx = stoi(options["erspan_idx"]);
+                }
+                pIfc = params;
+            } else if (ver->second == "2") {
+                erspan_ifc_v2 params = erspan_ifc_v2();
+                if (options.find("erspan_hwid") != options.end()) {
+                    params.erspan_hw_id = stoi(options["erspan_hwid"]);
+                }
+                if (options.find("erspan_dir") != options.end()) {
+                    params.erspan_dir = stoi(options["erspan_dir"]);
+                }
+                pIfc = params;
+            } else {
+                return false;
             }
         }
-        if (!pIfc) {
-            LOG(DEBUG) << "pIfc not set";
-            return false;
+        if (options.find("key") != options.end()) {
+            pIfc.key = stoi(options["key"]);
+        }
+        pIfc.erspan_ver = stoi(ver->second);
+        if (options.find("remote_ip") != options.end()) {
+            pIfc.remote_ip = options["remote_ip"];
         }
     } catch(const std::exception &e) {
         LOG(DEBUG) << "caught exception " << e.what();
@@ -487,10 +468,8 @@ void JsonRpc::getPortUuid(const string& name, string& uuid) {
     condSet.emplace(cond1);
     msg1.conditions = condSet;
 
-    uint64_t reqId = getNextId();
     const list<JsonRpcTransactMessage> requests{msg1};
-
-    if (!sendRequestAndAwaitResponse(requests, reqId)) {
+    if (!sendRequestAndAwaitResponse(requests)) {
         LOG(WARNING) << "Error sending message";
         return;
     }
@@ -518,10 +497,8 @@ void JsonRpc::getBridgeUuid(const string& name, string& uuid) {
     msg1.conditions = condSet;
     msg1.columns.emplace("_uuid");
 
-    uint64_t reqId = getNextId();
     const list<JsonRpcTransactMessage> requests{msg1};
-
-    if (!sendRequestAndAwaitResponse(requests, reqId)) {
+    if (!sendRequestAndAwaitResponse(requests)) {
         LOG(DEBUG) << "Error sending message";
     }
     handleGetBridgeUuidResp(pResp->reqId, pResp->payload, uuid);
@@ -606,20 +583,18 @@ bool JsonRpc::createMirror(const string& brUuid, const string& name, const set<s
     tdSet = TupleDataSet(tuples);
     msg2.rows.emplace("mirrors", tdSet);
 
-    uint64_t reqId = getNextId();
     const list<JsonRpcTransactMessage> requests = {msg1};
-
-    if (!sendRequestAndAwaitResponse(requests, reqId)) {
+    if (!sendRequestAndAwaitResponse(requests)) {
         LOG(DEBUG) << "Error sending message";
         return false;
     }
     return handleCreateMirrorResp(pResp->reqId, pResp->payload);
 }
 
-bool JsonRpc::addErspanPort(const string& bridge, shared_ptr<erspan_ifc> port) {
+bool JsonRpc::addErspanPort(const string& bridge, erspan_ifc& port) {
     JsonRpcTransactMessage msg1(OvsdbOperation::INSERT, OvsdbTable::PORT);
     vector<TupleData> tuples;
-    tuples.emplace_back("", port->name);
+    tuples.emplace_back("", port.name);
     TupleDataSet tdSet(tuples);
     msg1.rows.emplace("name", tdSet);
 
@@ -641,23 +616,23 @@ bool JsonRpc::addErspanPort(const string& bridge, shared_ptr<erspan_ifc> port) {
     // row entries
     // name
     tuples.clear();
-    tuples.emplace_back("", port->name);
+    tuples.emplace_back("", port.name);
     tdSet = TupleDataSet(tuples);
     msg2.rows.emplace("name", tdSet);
 
     // options depend upon version
     tuples.clear();
-    tuples.emplace_back("erspan_ver", std::to_string(port->erspan_ver));
-    tuples.emplace_back("key", std::to_string(port->key));
-    tuples.emplace_back("remote_ip", port->remote_ip);
-    if (port->erspan_ver == 1) {
+    tuples.emplace_back("erspan_ver", std::to_string(port.erspan_ver));
+    tuples.emplace_back("key", std::to_string(port.key));
+    tuples.emplace_back("remote_ip", port.remote_ip);
+    if (port.erspan_ver == 1) {
         tuples.emplace_back("erspan_idx",
-                            std::to_string(static_pointer_cast<erspan_ifc_v1>(port)->erspan_idx));
-    } else if (port->erspan_ver == 2) {
+                            std::to_string(static_cast<erspan_ifc_v1&>(port).erspan_idx));
+    } else if (port.erspan_ver == 2) {
         tuples.emplace_back("erspan_hwid",
-                            std::to_string(static_pointer_cast<erspan_ifc_v2>(port)->erspan_hw_id));
+                            std::to_string(static_cast<erspan_ifc_v2&>(port).erspan_hw_id));
         tuples.emplace_back("erspan_dir",
-                            std::to_string(static_pointer_cast<erspan_ifc_v2>(port)->erspan_dir));
+                            std::to_string(static_cast<erspan_ifc_v2&>(port).erspan_dir));
     }
     tdSet = TupleDataSet(tuples, "map");
     msg2.rows.emplace("options", tdSet);
@@ -686,10 +661,8 @@ bool JsonRpc::addErspanPort(const string& bridge, shared_ptr<erspan_ifc> port) {
     tdSet = TupleDataSet(tuples, "set");
     msg3.rows.emplace("ports", tdSet);
 
-    uint64_t reqId = getNextId();
     const list<JsonRpcTransactMessage> requests = {msg1, msg2, msg3};
-
-    if (!sendRequestAndAwaitResponse(requests, reqId)) {
+    if (!sendRequestAndAwaitResponse(requests)) {
         LOG(DEBUG) << "Error sending message";
         return false;
     }
@@ -732,10 +705,8 @@ bool JsonRpc::deleteMirror(const string& brName) {
     tdSet.label = "set";
     msg.rows.emplace("mirrors", tdSet);
 
-    uint64_t reqId = getNextId();
     list<JsonRpcTransactMessage> requests = {msg};
-
-    if (!sendRequestAndAwaitResponse(requests, reqId)) {
+    if (!sendRequestAndAwaitResponse(requests)) {
         LOG(DEBUG) << "Error sending message";
         return false;
     }

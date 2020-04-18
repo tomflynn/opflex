@@ -131,10 +131,6 @@ public:
          */
         string uuid;
         /**
-         * UUID of the bridge
-         */
-        string brUuid;
-        /**
          * set of source port UUIDs
          */
         set<string> src_ports;
@@ -257,7 +253,7 @@ public:
      * @param[in] port erspan_ifc struct
      * @return true if success, false otherwise
      */
-    bool addErspanPort(const string& bridgeName, shared_ptr<erspan_ifc> port);
+    bool addErspanPort(const string& bridgeName, erspan_ifc& port);
 
     /**
      * createNetFlow
@@ -347,10 +343,10 @@ public:
 
     /**
      * get ERSPAN interface parameters from OVSDB
-     * @param[out] pIfc empty shared pointer reference to erspan interface struct
+     * @param[out] params erspan interface struct
      * @return true if success, false otherwise
      */
-    bool getErspanIfcParams(shared_ptr<erspan_ifc>& pIfc);
+    bool getErspanIfcParams(erspan_ifc& params);
 
     /**
      * check if connection has been established
@@ -363,14 +359,7 @@ public:
      */
     OvsdbConnection* getConnection() { return conn; }
 
-    /**
-     * set the next request ID
-     * @param id_ request id
-     */
-    void setNextId(uint64_t id_) { id = id_;}
-
 private:
-    uint64_t getNextId() { return ++id; }
 
     /**
      * get UUIDs from a Value struct. Can handle both a single uuid two tuple
@@ -397,10 +386,10 @@ private:
      * @param[out] pIfc empty shared pointer to ERSPAN
      * interface struct
      */
-    static bool getErspanOptions(const uint64_t reqId, const Document& payload, shared_ptr<erspan_ifc>& pIfc);
+    static bool getErspanOptions(const uint64_t reqId, const Document& payload, erspan_ifc& pIfc);
 
     template <typename T>
-    inline bool sendRequestAndAwaitResponse(const list<T>& tl, uint64_t reqId) {
+    inline bool sendRequestAndAwaitResponse(const list<T> &tl) {
         unique_lock<mutex> lock(conn->mtx);
         if (!conn->ready.wait_for(lock, milliseconds(WAIT_TIMEOUT*1000),
                 [=]{return conn->isConnected();})) {
@@ -408,7 +397,7 @@ private:
             return false;
         }
         responseReceived = false;
-        conn->sendTransaction(reqId, tl, this);
+        conn->sendTransaction(tl, this);
 
         if (!conn->ready.wait_for(lock, milliseconds(WAIT_TIMEOUT*1000),
                                    [=]{return responseReceived;})) {
@@ -436,7 +425,6 @@ private:
     const int WAIT_TIMEOUT = 10;
     OvsdbConnection* conn;
     shared_ptr<Response> pResp;
-    uint64_t id = 0;
 };
 
 }

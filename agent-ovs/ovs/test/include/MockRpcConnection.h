@@ -22,7 +22,7 @@ public:
     /**
      * constructor that takes a Transaction object reference
      */
-    MockRpcConnection() : OvsdbConnection() {}
+    MockRpcConnection() : OvsdbConnection(false) {}
 
     /**
      * establish mock connection
@@ -37,11 +37,10 @@ public:
     /**
      * send transaction
      *
-     * @param[in] reqId request ID
      * @param[in] requests list of Transact messages
      * @param[in] trans callback
      */
-    virtual void sendTransaction(const uint64_t& reqId, const list<JsonRpcTransactMessage>& requests, Transaction* trans);
+    virtual void sendTransaction(const list<JsonRpcTransactMessage>& requests, Transaction* trans);
 
     /**
      * destructor
@@ -92,7 +91,7 @@ public:
     /**
      * number of span responses to send
      */
-    static const unsigned int no_of_span_msgs = 18;
+    static const unsigned int no_of_span_msgs = 19;
 
     /**
      * number of netflow responses to send
@@ -240,6 +239,8 @@ private:
             */
     string response13 {"[{\"uuid\":[\"uuid\",\"ad0810fb-fa38-4dd0-b0b3-6a98985dd2bc\"]},{\"count\":1}]"};
 
+    string selectInterfaceResp {};
+
     /* SPAN request/responses end */
 
     /* NetFlow request/responses start */
@@ -275,6 +276,7 @@ private:
     string response[no_of_span_msgs + no_of_netflow_msgs] = {response1, selectPortsResp, response3, bridgePortSelectResp, updateBridgePortsResp,
             response6, response7, interfaceInsertResp, response9, response10, response11, response12, response13,
             bridgePortSelectResp, interfaceInsertResp, selectPortsResp, bridgePortSelectResp, updateBridgePortsResp,
+            selectInterfaceResp,
             deleteResp, deleteResp, getBridgeUuidResp, createNetflowResp, deleteResp,
             deleteResp, deleteResp, getBridgeUuidResp, createIpFixResp, deleteResp};
 
