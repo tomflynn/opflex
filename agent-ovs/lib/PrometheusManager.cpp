@@ -240,7 +240,8 @@ PrometheusManager::PrometheusManager(Agent &agent_,
                                      rddrop_last_genId{0},
                                      sgclassifier_last_genId{0},
                                      contract_last_genId{0},
-                                     disabled{true}
+                                     disabled{true},
+                                     exposeEpSvcNan{false}
 {
     //Init state to avoid coverty warnings
     init();
@@ -834,10 +835,13 @@ void PrometheusManager::MetricDupChecker<T>::clear (void)
 }
 
 // Start of PrometheusManager instance
-void PrometheusManager::start (bool exposeLocalHostOnly)
+void PrometheusManager::start (bool exposeLocalHostOnly, bool exposeEpSvcNan_)
 {
     disabled = false;
-    LOG(DEBUG) << "starting prometheus manager, exposeLHOnly: " << exposeLocalHostOnly;
+    exposeEpSvcNan = exposeEpSvcNan_;
+    LOG(DEBUG) << "starting prometheus manager,"
+               << " exposeLHOnly: " << exposeLocalHostOnly
+               << " exposeEpSvcNan: " << exposeEpSvcNan;
     /**
      * create an http server running on port 9612
      * Note: The third argument is the total worker thread count. Prometheus
@@ -1841,7 +1845,7 @@ mgauge_pair_t PrometheusManager::getDynamicGaugeSvcTarget (SVC_TARGET_METRICS me
     mgauge_pair_t mgauge = boost::none;
     auto itr = svc_target_gauge_map[metric].find(uuid);
     if (itr == svc_target_gauge_map[metric].end()) {
-        LOG(DEBUG) << "Dyn Gauge SvcTargetCounter not found"
+        LOG(TRACE) << "Dyn Gauge SvcTargetCounter not found"
                    << " metric: " << metric
                    << " uuid: " << uuid;
     } else {
@@ -1858,7 +1862,7 @@ mgauge_pair_t PrometheusManager::getDynamicGaugeSvc (SVC_METRICS metric,
     mgauge_pair_t mgauge = boost::none;
     auto itr = svc_gauge_map[metric].find(uuid);
     if (itr == svc_gauge_map[metric].end()) {
-        LOG(DEBUG) << "Dyn Gauge SvcCounter not found"
+        LOG(TRACE) << "Dyn Gauge SvcCounter not found"
                    << " metric: " << metric
                    << " uuid: " << uuid;
     } else {
@@ -1875,7 +1879,7 @@ mgauge_pair_t PrometheusManager::getDynamicGaugePodSvc (PODSVC_METRICS metric,
     mgauge_pair_t mgauge = boost::none;
     auto itr = podsvc_gauge_map[metric].find(uuid);
     if (itr == podsvc_gauge_map[metric].end()) {
-        LOG(DEBUG) << "Dyn Gauge PodSvcCounter not found"
+        LOG(TRACE) << "Dyn Gauge PodSvcCounter not found"
                    << " metric: " << metric
                    << " uuid: " << uuid;
     } else {
@@ -2209,7 +2213,7 @@ bool PrometheusManager::removeDynamicGaugePodSvc (PODSVC_METRICS metric,
         gauge_check.remove(mgauge.get().second);
         gauge_podsvc_family_ptr[metric]->Remove(mgauge.get().second);
     } else {
-        LOG(DEBUG) << "remove dynamic gauge podsvc not found uuid:" << uuid;
+        LOG(TRACE) << "remove dynamic gauge podsvc not found uuid:" << uuid;
         return false;
     }
     return true;
@@ -2511,102 +2515,85 @@ size_t PrometheusManager::calcHashEpAttributes (const string& ep_name,
 /* Function called from IntFlowManager to update PodSvcCounter */
 void PrometheusManager::addNUpdatePodSvcCounter (bool isEpToSvc,
                                                  const string& uuid,
+                                                 uint64_t bytes,
+                                                 uint64_t pkts,
                   const unordered_map<string, string>& ep_attr_map,
                   const unordered_map<string, string>& svc_attr_map)
 {
     RETURN_IF_DISABLED
-    using namespace opflex::modb;
-    using namespace modelgbp::gbpe;
-    using namespace modelgbp::observer;
 
     const lock_guard<mutex> lock(podsvc_counter_mutex);
-    Mutator mutator(framework, "policyelement");
-    optional<shared_ptr<SvcStatUniverse> > su =
-                            SvcStatUniverse::resolve(framework);
-    if (!su)
+
+    if (!exposeEpSvcNan && !pkts)
         return;
 
     if (isEpToSvc) {
-        optional<shared_ptr<EpToSvcCounter> > counter =
-                        su.get()->resolveGbpeEpToSvcCounter(agent.getUuid(),
-                                                            uuid);
-        if (counter) {
-            // Create the gauge counters if they arent present already
-            for (PODSVC_METRICS metric=PODSVC_EP2SVC_MIN;
-                    metric <= PODSVC_EP2SVC_MAX;
-                        metric = PODSVC_METRICS(metric+1)) {
-                createDynamicGaugePodSvc(metric,
-                                         uuid,
-                                         ep_attr_map,
-                                         svc_attr_map);
-            }
+        // Create the gauge counters if they arent present already
+        for (PODSVC_METRICS metric=PODSVC_EP2SVC_MIN;
+                metric <= PODSVC_EP2SVC_MAX;
+                    metric = PODSVC_METRICS(metric+1)) {
+            createDynamicGaugePodSvc(metric,
+                                     uuid,
+                                     ep_attr_map,
+                                     svc_attr_map);
+        }
 
-            // Update the metrics
-            for (PODSVC_METRICS metric=PODSVC_EP2SVC_MIN;
-                    metric <= PODSVC_EP2SVC_MAX;
-                        metric = PODSVC_METRICS(metric+1)) {
-                const mgauge_pair_t &mgauge = getDynamicGaugePodSvc(metric, uuid);
-                optional<uint64_t>   metric_opt;
-                switch (metric) {
-                case PODSVC_EP2SVC_BYTES:
-                    metric_opt = counter.get()->getBytes();
-                    break;
-                case PODSVC_EP2SVC_PKTS:
-                    metric_opt = counter.get()->getPackets();
-                    break;
-                default:
-                    LOG(ERROR) << "Unhandled eptosvc metric: " << metric;
-                }
-                if (metric_opt && mgauge)
-                    mgauge.get().second->Set(static_cast<double>(metric_opt.get()));
-                if (!mgauge) {
-                    LOG(ERROR) << "ep2svc stats invalid update for uuid: " << uuid;
-                    break;
-                }
+        // Update the metrics
+        for (PODSVC_METRICS metric=PODSVC_EP2SVC_MIN;
+                metric <= PODSVC_EP2SVC_MAX;
+                    metric = PODSVC_METRICS(metric+1)) {
+            const mgauge_pair_t &mgauge = getDynamicGaugePodSvc(metric, uuid);
+            optional<uint64_t>   metric_opt;
+            switch (metric) {
+            case PODSVC_EP2SVC_BYTES:
+                metric_opt = bytes;
+                break;
+            case PODSVC_EP2SVC_PKTS:
+                metric_opt = pkts;
+                break;
+            default:
+                LOG(ERROR) << "Unhandled eptosvc metric: " << metric;
             }
-        } else {
-            LOG(DEBUG) << "EpToSvcCounter yet to be created for uuid: " << uuid;
+            if (metric_opt && mgauge)
+                mgauge.get().second->Set(static_cast<double>(metric_opt.get()));
+            if (!mgauge) {
+                LOG(ERROR) << "ep2svc stats invalid update for uuid: " << uuid;
+                break;
+            }
         }
     } else {
-        optional<shared_ptr<SvcToEpCounter> > counter =
-                        su.get()->resolveGbpeSvcToEpCounter(agent.getUuid(),
-                                                            uuid);
-        if (counter) {
-            // Create the gauge counters if they arent present already
-            for (PODSVC_METRICS metric=PODSVC_SVC2EP_MIN;
-                    metric <= PODSVC_SVC2EP_MAX;
-                        metric = PODSVC_METRICS(metric+1)) {
-                createDynamicGaugePodSvc(metric,
-                                         uuid,
-                                         ep_attr_map,
-                                         svc_attr_map);
-            }
+        // Create the gauge counters if they arent present already
+        for (PODSVC_METRICS metric=PODSVC_SVC2EP_MIN;
+                metric <= PODSVC_SVC2EP_MAX;
+                    metric = PODSVC_METRICS(metric+1)) {
+            createDynamicGaugePodSvc(metric,
+                                     uuid,
+                                     ep_attr_map,
+                                     svc_attr_map);
+        }
 
-            // Update the metrics
-            for (PODSVC_METRICS metric=PODSVC_SVC2EP_MIN;
-                    metric <= PODSVC_SVC2EP_MAX;
-                        metric = PODSVC_METRICS(metric+1)) {
-                const mgauge_pair_t &mgauge = getDynamicGaugePodSvc(metric, uuid);
-                optional<uint64_t>   metric_opt;
-                switch (metric) {
-                case PODSVC_SVC2EP_BYTES:
-                    metric_opt = counter.get()->getBytes();
-                    break;
-                case PODSVC_SVC2EP_PKTS:
-                    metric_opt = counter.get()->getPackets();
-                    break;
-                default:
-                    LOG(ERROR) << "Unhandled svctoep metric: " << metric;
-                }
-                if (metric_opt && mgauge)
-                    mgauge.get().second->Set(static_cast<double>(metric_opt.get()));
-                if (!mgauge) {
-                    LOG(ERROR) << "svc2ep stats invalid update for uuid: " << uuid;
-                    break;
-                }
+        // Update the metrics
+        for (PODSVC_METRICS metric=PODSVC_SVC2EP_MIN;
+                metric <= PODSVC_SVC2EP_MAX;
+                    metric = PODSVC_METRICS(metric+1)) {
+            const mgauge_pair_t &mgauge = getDynamicGaugePodSvc(metric, uuid);
+            optional<uint64_t>   metric_opt;
+            switch (metric) {
+            case PODSVC_SVC2EP_BYTES:
+                metric_opt = bytes;
+                break;
+            case PODSVC_SVC2EP_PKTS:
+                metric_opt = pkts;
+                break;
+            default:
+                LOG(ERROR) << "Unhandled svctoep metric: " << metric;
             }
-        } else {
-            LOG(DEBUG) << "SvcToEpCounter yet to be created for uuid: " << uuid;
+            if (metric_opt && mgauge)
+                mgauge.get().second->Set(static_cast<double>(metric_opt.get()));
+            if (!mgauge) {
+                LOG(ERROR) << "svc2ep stats invalid update for uuid: " << uuid;
+                break;
+            }
         }
     }
 }
@@ -3221,23 +3208,30 @@ void PrometheusManager::removePodSvcCounter (bool isEpToSvc,
     RETURN_IF_DISABLED
     const lock_guard<mutex> lock(podsvc_counter_mutex);
 
-    LOG(DEBUG) << "remove podsvc counter"
-               << " isEpToSvc: " << isEpToSvc
-               << " uuid: " << uuid;
 
     if (isEpToSvc) {
         for (PODSVC_METRICS metric=PODSVC_EP2SVC_MIN;
                 metric <= PODSVC_EP2SVC_MAX;
                     metric = PODSVC_METRICS(metric+1)) {
-            if (!removeDynamicGaugePodSvc(metric, uuid))
+            if (!removeDynamicGaugePodSvc(metric, uuid)) {
                 break;
+            } else {
+                LOG(DEBUG) << "remove podsvc counter"
+                           << " eptosvc uuid: " << uuid
+                           << " metric: " << metric;
+            }
         }
     } else {
         for (PODSVC_METRICS metric=PODSVC_SVC2EP_MIN;
                 metric <= PODSVC_SVC2EP_MAX;
                     metric = PODSVC_METRICS(metric+1)) {
-            if (!removeDynamicGaugePodSvc(metric, uuid))
+            if (!removeDynamicGaugePodSvc(metric, uuid)) {
                 break;
+            } else {
+                LOG(DEBUG) << "remove podsvc counter"
+                           << " svctoep uuid: " << uuid
+                           << " metric: " << metric;
+            }
         }
     }
 }
