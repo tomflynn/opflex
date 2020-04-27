@@ -535,6 +535,9 @@ void Agent::applyProperties() {
 void Agent::start() {
     LOG(INFO) << "Starting OpFlex Agent " << uuid;
     started = true;
+    #ifdef HAVE_PROMETHEUS_SUPPORT
+    LOG(DEBUG) << "prometheus enabled " << HAVE_PROMETHEUS_SUPPORT ;
+    #endif
 
     // instantiate the opflex framework
     framework.setModel(modelgbp::getMetadata());
