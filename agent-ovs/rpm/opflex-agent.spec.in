@@ -60,6 +60,7 @@ policy semantics on the network traffic.
 Summary: Transitional package for OpFlex Agent and OVS renderer
 Requires: %{name} >= %{epoch}:%{version}-%{release}
 Requires: %{name}-renderer-openvswitch >= %{epoch}:%{version}-%{release}
+Requires: prometheus-cpp >= 0.9.0
 
 %description -n agent-ovs
 This package depends on opflex-agent and opflex-agent-renderer-openvswitch to
@@ -112,7 +113,7 @@ Development libraries for libopflex_agent
 %build
 . /opt/rh/devtoolset-7/enable
 %define __strip /opt/rh/devtoolset-7/root/usr/bin/strip
-%configure --disable-assert  --enable-prometheus
+%configure --disable-assert  --enable-prometheus PROMETHEUS_CORE_LIBS='none' PROMETHEUS_CORE_CFLAGS='none' PROMETHEUS_PULL_LIBS='none' PROMETHEUS_PULL_CFLAGS='none'
 make %{?_smp_mflags}
 
 %install
