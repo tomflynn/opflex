@@ -70,6 +70,7 @@ allow smoother transition from the older packages
 Summary: Open vSwitch renderer module for OpFlex Agent
 Group: Development/Libraries
 Requires: %{name} = %{epoch}:%{version}-%{release}
+Requires: prometheus-cpp >= 0.9.0
 Requires: noiro-openvswitch-lib >= 2.12.0
 Requires: openvswitch >= 2.9.0
 Requires(post): /sbin/ldconfig
@@ -100,6 +101,7 @@ Requires: %{name} = %{epoch}:%{version}-%{release}
 Requires: pkgconfig
 Requires: libopflex-devel >= %{version}
 Requires: libnetfilter_conntrack-devel >= 1.0
+Requires: prometheus-cpp >= 0.9.0
 Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig
 Provides: libopflex_agent-static = %{version}-%{release}
@@ -113,7 +115,7 @@ Development libraries for libopflex_agent
 %build
 . /opt/rh/devtoolset-7/enable
 %define __strip /opt/rh/devtoolset-7/root/usr/bin/strip
-%configure --disable-assert  --enable-prometheus PROMETHEUS_CORE_LIBS='none' PROMETHEUS_CORE_CFLAGS='none' PROMETHEUS_PULL_LIBS='none' PROMETHEUS_PULL_CFLAGS='none'
+%configure --disable-assert  --enable-prometheus 
 make %{?_smp_mflags}
 
 %install
