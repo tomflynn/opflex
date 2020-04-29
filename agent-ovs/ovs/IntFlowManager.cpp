@@ -142,11 +142,9 @@ IntFlowManager::IntFlowManager(Agent& agent_,
                                SwitchManager& switchManager_,
                                IdGenerator& idGen_,
                                CtZoneManager& ctZoneManager_,
-                               PacketInHandler& pktInHandler_,
                                TunnelEpManager& tunnelEpManager_) :
     agent(agent_), switchManager(switchManager_), idGen(idGen_),
-    ctZoneManager(ctZoneManager_), pktInHandler(pktInHandler_),
-    tunnelEpManager(tunnelEpManager_),
+    ctZoneManager(ctZoneManager_), tunnelEpManager(tunnelEpManager_),
 #ifdef HAVE_PROMETHEUS_SUPPORT
     prometheusManager(agent.getPrometheusManager()),
 #endif
@@ -1302,7 +1300,7 @@ static void flowsEndpointSource(FlowEntryList& elSrc,
 
         for (const string& ipStr : endPoint.getIPs()) {
             network::cidr_t cidr;
-            if (!network::cidr_from_string(ipStr, cidr), false) {
+            if (!network::cidr_from_string(ipStr, cidr, false)) {
                 LOG(WARNING) << "Invalid endpoint IP: "
                              << ipStr;
                 continue;
@@ -2467,7 +2465,7 @@ updateSvcTgtStatsCounters (const uint64_t &cookie,
                                                      opSvcTgt.get()->getNodePortTxpackets(0),
                                                      svcAttr,
                                                      epAttr,
-                                                     epAttr.size()!=0?true:false, true);
+                                                     false, !epAttr.empty(), true);
             } else {
                 prometheusManager.addNUpdateSvcTargetCounter(svcUuid,
                                                      nhipStr,
@@ -2477,7 +2475,7 @@ updateSvcTgtStatsCounters (const uint64_t &cookie,
                                                      opSvcTgt.get()->getTxpackets(0),
                                                      svcAttr,
                                                      epAttr,
-                                                     epAttr.size()!=0?true:false);
+                                                     false, !epAttr.empty());
             }
         } else {
             if (isNodePort) {
@@ -2489,7 +2487,7 @@ updateSvcTgtStatsCounters (const uint64_t &cookie,
                                                      updPktCount,
                                                      svcAttr,
                                                      epAttr,
-                                                     epAttr.size()!=0?true:false, true);
+                                                     false, !epAttr.empty(), true);
             } else {
                 prometheusManager.addNUpdateSvcTargetCounter(svcUuid,
                                                      nhipStr,
@@ -2499,7 +2497,7 @@ updateSvcTgtStatsCounters (const uint64_t &cookie,
                                                      updPktCount,
                                                      svcAttr,
                                                      epAttr,
-                                                     epAttr.size()!=0?true:false);
+                                                     false, !epAttr.empty());
             }
         }
 #endif
@@ -2689,14 +2687,14 @@ void IntFlowManager::clearSvcTgtStatsCounters (const std::string& svcUuid,
                                                      0, 0, 0, 0,
                                                      svcAttr,
                                                      attr_map(),
-                                                     true, true);
+                                                     false, true, true);
         } else {
             prometheusManager.addNUpdateSvcTargetCounter(svcUuid,
                                                      nhipStr,
                                                      0, 0, 0, 0,
                                                      svcAttr,
                                                      attr_map(),
-                                                     true);
+                                                     false, true);
         }
 #endif
     }
@@ -2750,14 +2748,14 @@ void IntFlowManager::clearSvcStatsCounters (const std::string& uuid,
                                                              0, 0, 0, 0,
                                                              svcAttr,
                                                              attr_map(),
-                                                             true, true);
+                                                             false, true, true);
                 } else {
                     prometheusManager.addNUpdateSvcTargetCounter(uuid,
                                                              nhip.get(),
                                                              0, 0, 0, 0,
                                                              svcAttr,
                                                              attr_map(),
-                                                             true);
+                                                             false, true);
                 }
             }
 #endif
@@ -3104,6 +3102,11 @@ void IntFlowManager::updateSvcNodeStatsFlows (const string &uuid,
                                          const Service::ServiceMapping &sm,
                                          const attr_map &svcAttr,
                                          const attr_map &epAttr) -> void {
+
+        if (!sm.getNodePort()) {
+            LOG(TRACE) << "nodeport not valid for svc uuid: " << svc_uuid;
+            return;
+        }
 
         boost::system::error_code ec;
         address nhAddr = address::from_string(nhipStr, ec);
