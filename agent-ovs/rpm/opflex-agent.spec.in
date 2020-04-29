@@ -61,7 +61,6 @@ policy semantics on the network traffic.
 Summary: Transitional package for OpFlex Agent and OVS renderer
 Requires: %{name} >= %{epoch}:%{version}-%{release}
 Requires: %{name}-renderer-openvswitch >= %{epoch}:%{version}-%{release}
-Requires: prometheus-cpp >= 0.9.0
 
 %description -n agent-ovs
 This package depends on opflex-agent and opflex-agent-renderer-openvswitch to
