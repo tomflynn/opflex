@@ -31,8 +31,9 @@ Requires: boost-system
 Requires: boost-date-time
 Requires: boost-thread
 Requires: boost-filesystem
-Requires: prometheus-cpp >= 0.9.0
-BuildRequires: prometheus-cpp >= 0.9.0
+Requires: prometheus-cpp-lib >= 0.9.0
+BuildRequires: prometheus-cpp-lib >= 0.9.0
+BuildRequires: prometheus-cpp-devel >= 0.9.0
 BuildRequires: boost-devel
 BuildRequires: boost-test
 BuildRequires: libopflex-devel
@@ -70,7 +71,6 @@ allow smoother transition from the older packages
 Summary: Open vSwitch renderer module for OpFlex Agent
 Group: Development/Libraries
 Requires: %{name} = %{epoch}:%{version}-%{release}
-Requires: prometheus-cpp >= 0.9.0
 Requires: noiro-openvswitch-lib >= 2.12.0
 Requires: openvswitch >= 2.9.0
 Requires(post): /sbin/ldconfig
@@ -86,7 +86,7 @@ Group: Development/Libraries
 Requires: %{name} = %{epoch}:%{version}-%{release}
 Requires: libopflex >= %{version}
 Requires: libmodelgbp >= %{version}
-Requires: prometheus-cpp >= 0.9.0
+Requires: prometheus-cpp-lib >= 0.9.0
 Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig
 
@@ -101,7 +101,7 @@ Requires: %{name} = %{epoch}:%{version}-%{release}
 Requires: pkgconfig
 Requires: libopflex-devel >= %{version}
 Requires: libnetfilter_conntrack-devel >= 1.0
-Requires: prometheus-cpp >= 0.9.0
+Requires: prometheus-cpp-devel >= 0.9.0
 Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig
 Provides: libopflex_agent-static = %{version}-%{release}
