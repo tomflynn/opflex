@@ -11,7 +11,7 @@ PACKAGE=opflex-agent
 
 override_dh_auto_configure:
 	if [ -z $(filter norenderer,$(DEB_BUILD_PROFILES)) ]; then \
-            dh_auto_configure -- --disable-assert --disable-static --with-buildversion=@BVERSION@ --enable--prometheus; \
+            dh_auto_configure -- --disable-assert --disable-static --with-buildversion=@BVERSION@ --enable-prometheus; \
 	else \
             dh_auto_configure -- --disable-assert --disable-static --with-buildversion=@BVERSION@ --enable-renderer-ovs=no --enable-prometheus;\
         fi
