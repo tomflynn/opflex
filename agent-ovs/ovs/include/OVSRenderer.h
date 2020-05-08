@@ -112,6 +112,7 @@ private:
     bool connTrack;
     uint16_t ctZoneRangeStart;
     uint16_t ctZoneRangeEnd;
+    bool ovsdbUseLocalTcpPort;
 
     bool ifaceStatsEnabled;
     long ifaceStatsInterval;
@@ -141,6 +142,11 @@ private:
      */
     void onCleanupTimer(const boost::system::error_code& ec);
     std::unique_ptr<boost::asio::deadline_timer> cleanupTimer;
+
+    /**
+     * Start packet logger
+     */
+    void startPacketLogger();
 };
 
 /**

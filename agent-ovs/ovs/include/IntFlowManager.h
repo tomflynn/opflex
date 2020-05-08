@@ -65,14 +65,12 @@ public:
      * @param switchManager the switch manager
      * @param idGen the flow ID generator
      * @param ctZoneManager the conntrack zone manager
-     * @param pktInHandler the packet-in handler
      * @param tnlEpManager tunnelEpManager instance
      */
     IntFlowManager(Agent& agent,
                    SwitchManager& switchManager,
                    IdGenerator& idGen,
                    CtZoneManager& ctZoneManager,
-                   PacketInHandler& pktInHandler,
                    TunnelEpManager& tnlEpManager);
     ~IntFlowManager() {}
 
@@ -365,12 +363,6 @@ public:
     in6AddrToLong(boost::asio::ip::address sAddr, uint32_t *pAddr);
 
     /**
-     * Get the promiscuous-mode ID equivalent for a flood domain ID
-     * @param fgrpId the flood domain Id
-     */
-    static uint32_t getPromId(uint32_t fgrpId);
-
-    /**
      * Get the tunnel destination to use for the given endpoint group.
      * @param epgURI the group URI
      * @return the tunnel destination IP
@@ -572,6 +564,28 @@ private:
                              const bool &is_add);
 
     /**
+     * Update ext<-->svc-tgt flows due to changes in a service/ep
+     *
+     * @param uuid UUID of the changed service/ep
+     * @param is_svc true if the uuid belongs to svc
+     * @param is_add true if the svc/ep is added
+     */
+    void updateSvcExtStatsFlows(const std::string &uuid,
+                                const bool &is_svc,
+                                const bool &is_add);
+
+    /**
+     * Update node<-->svc-tgt flows due to changes in a service/ep.
+     *
+     * @param uuid UUID of the changed service/ep
+     * @param is_svc true if the uuid belongs to svc
+     * @param is_add true if the svc/ep is added
+     */
+    void updateSvcNodeStatsFlows(const std::string &uuid,
+                                 const bool &is_svc,
+                                 const bool &is_add);
+
+    /**
      * Update any<-->svc-tgt flows due to changes in a service/ep.
      *
      * @param uuid UUID of the changed service/ep
@@ -599,9 +613,19 @@ private:
      *
      * @param uuid      The uuid of svc
      * @param attr_map  The attribute map of service
+<<<<<<< HEAD
      */
     void clearSvcStatsCounters(const std::string& uuid,
                                const attr_map& attr_map);
+=======
+     * @param isExternal  is this update for external or cluster svc
+     * @param isNodePort  Does this service have a nodePort configured
+     */
+    void clearSvcStatsCounters(const std::string& uuid,
+                               const attr_map& attr_map,
+                               bool isExternal,
+                               bool isNodePort=false);
+>>>>>>> origin/master
 
     /**
      * Clear svc-tgt counters
@@ -609,10 +633,21 @@ private:
      * @param uuid The uuid of svc
      * @param nhip The ip of svc-tgt
      * @param attr_map  The attribute map of service
+<<<<<<< HEAD
      */
     void clearSvcTgtStatsCounters(const std::string& uuid,
                                   const std::string& nhip,
                                   const attr_map& attr_map);
+=======
+     * @param isExternal  is this update for external or cluster tgt
+     * @param isNodePort  Does this service have a nodePort configured
+     */
+    void clearSvcTgtStatsCounters(const std::string& uuid,
+                                  const std::string& nhip,
+                                  const attr_map& attr_map,
+                                  bool isExternal,
+                                  bool isNodePort=false);
+>>>>>>> origin/master
 
     /**
      * Clear podsvc counter objects
@@ -639,9 +674,7 @@ private:
                                    const bool &isEpToSvc,
                                    const string& idStr,
                                    const uint64_t &pkts,
-                                   const uint64_t &bytes,
-                                   const attr_map &ep_attr_map,
-                                   const attr_map &svc_attr_map);
+                                   const uint64_t &bytes);
 
     /*
      * Update svc counter objects
@@ -650,7 +683,8 @@ private:
                                 const string& uuid,
                                 const uint64_t &pkts,
                                 const uint64_t &bytes,
-                                const bool &add);
+                                const bool &add,
+                                const bool &isNodePort=false);
 
     /*
      * Update podsvc counter attributes
@@ -816,7 +850,6 @@ private:
     SwitchManager& switchManager;
     IdGenerator& idGen;
     CtZoneManager& ctZoneManager;
-    PacketInHandler& pktInHandler;
     TunnelEpManager& tunnelEpManager;
 #ifdef HAVE_PROMETHEUS_SUPPORT
     PrometheusManager& prometheusManager;

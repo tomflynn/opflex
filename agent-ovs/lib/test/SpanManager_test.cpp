@@ -79,9 +79,6 @@ public:
 
         mutator.commit();
 
-        shared_ptr<L2Universe> l2u =
-                    L2Universe::resolve(framework).get();
-
         Endpoint ep1("e82e883b-851d-4cc6-bedb-fb5e27530043");
         ep1.setMAC(MAC("00:00:00:00:00:01"));
         ep1.addIP("10.1.1.2");
@@ -99,6 +96,7 @@ public:
         epSource.updateEndpoint(ep2);
 
         Mutator mutatorElem(framework, "policyelement");
+        shared_ptr<L2Universe> l2u = L2Universe::resolve(framework).get();
         l2E1 = l2u->addEprL2Ep(bd->getURI().toString(),
                 ep1.getMAC().get());
         l2E1->setUuid(ep1.getUUID());
@@ -115,9 +113,7 @@ public:
 
         Mutator mutator2(framework, "policyreg");
         lEp1->addSpanLocalEpToEpRSrc()->setTargetL2Ep(l2E1->getURI());
-
         mutator2.commit();
-
     }
 
     virtual ~SpanFixture() {}
@@ -145,65 +141,47 @@ static bool checkSpan(boost::optional<shared_ptr<SessionState>> pSess,
                       const URI& spanUri) {
     if (!pSess)
         return false;
-    if (spanUri == pSess.get()->getUri())
-        return true;
-    else
-        return false;
+    return spanUri == pSess.get()->getUri();
 }
 
 static bool checkSrcEps(boost::optional<shared_ptr<SessionState>> pSess,
-    shared_ptr<span::SrcMember> srcMem, shared_ptr<L2Ep> l2e) {
+    shared_ptr<span::SrcMember>& srcMem, shared_ptr<L2Ep>& l2e) {
     if (!pSess) {
         return false;
     }
     SessionState::srcEpSet srcEps;
-    pSess.get()->getSrcEndPointSet(srcEps);
+    pSess.get()->getSrcEndpointSet(srcEps);
     if (srcEps.size() != 2) {
         return false;
     }
     auto it = srcEps.begin();
     for (; it != srcEps.end(); it++) {
         bool retVal = true;
-        if (srcMem->getDir().get() != (*it)->getDirection())
+        if (srcMem->getDir().get() != it->getDirection())
             retVal = false;
-        if (l2e->getInterfaceName().get() != (*it)->getPort())
+        if (l2e->getInterfaceName().get() != it->getPort())
             retVal = false;
         if (retVal)
             return true;
     }
-
-    LOG(DEBUG) << "returning false";
     return false;
 }
 
-static bool checkDst(boost::optional<shared_ptr<SessionState>> pSess,
-    shared_ptr<span::DstSummary> dstSumm1) {
+static bool checkDst(boost::optional<shared_ptr<SessionState>> pSess, const shared_ptr<span::DstSummary>& dstSumm1) {
     if (!pSess) {
         return false;
     }
-    unordered_map<URI, shared_ptr<DstEndPoint>> dstMap;
-    pSess.get()->getDstEndPointMap(dstMap);
-    unordered_map<URI, shared_ptr<DstEndPoint>>::iterator it;
-    it = dstMap.find(dstSumm1->getURI());
-    if (it == dstMap.end())
-        return false;
-    if (it->second->getAddress().to_string() != dstSumm1->getDest().get())
-        return false;
-    return true;
+    return !(pSess.get()->getDestination().to_string() != dstSumm1->getDest().get());
 }
 
-static bool testGetSession(shared_ptr<LocalEp> le, optional<URI> uri) {
+static bool testGetSession(shared_ptr<LocalEp>& le, optional<URI>& uri) {
     if (!(uri && SpanManager::getSession(le)))
         return true;
     if (uri && !SpanManager::getSession(le))
         return false;
     if (!uri && SpanManager::getSession(le))
         return false;
-
-    if (SpanManager::getSession(le).get() != uri)
-        return false;
-    else
-        return true;
+    return !(SpanManager::getSession(le).get() != uri);
 }
 
 BOOST_FIXTURE_TEST_CASE( verify_artifacts, SpanFixture ) {
@@ -217,6 +195,15 @@ BOOST_FIXTURE_TEST_CASE( verify_artifacts, SpanFixture ) {
             dstSumm1), 500);
     boost::optional<URI> uri("/SpanUniverse/SpanSession/sess1/");
     BOOST_CHECK(testGetSession(lEp1, uri));
+    const auto& state = agent.getSpanManager().getSessionState(sess->getURI());
+    BOOST_CHECK_EQUAL(sess->getName().get(), state.get()->getName());
+
+    Mutator mutator(framework, "policyreg");
+    const URI& sessionUri = sess->getURI();
+    sess->remove();
+    mutator.commit();
+
+    WAIT_FOR(!span::Session::resolve(framework, sessionUri), 500);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

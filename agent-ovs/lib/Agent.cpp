@@ -35,7 +35,6 @@
 #include <opflexagent/Renderer.h>
 #include <opflexagent/SimStats.h>
 
-#include <unordered_map>
 #include <cstdlib>
 #include <mutex>
 #include <condition_variable>
@@ -71,6 +70,8 @@ Agent::Agent(OFFramework& framework_, const LogParams& _logParams)
       netflowManager(framework,agent_io),
       prometheusEnabled(true),
       prometheusExposeLocalHostOnly(false),
+      prometheusExposeEpSvcNan(false),
+      behaviorL34FlowsWithoutSubnet(true),
       logParams(_logParams) {
 #else
 Agent::Agent(OFFramework& framework_, const LogParams& _logParams)
@@ -84,6 +85,7 @@ Agent::Agent(OFFramework& framework_, const LogParams& _logParams)
       contractInterval(0), securityGroupInterval(0), interfaceInterval(0),
       spanManager(framework, agent_io),
       netflowManager(framework,agent_io),
+      behaviorL34FlowsWithoutSubnet(true),
       logParams(_logParams) {
 #endif
     std::random_device rng;
@@ -151,6 +153,7 @@ void Agent::setProperties(const boost::property_tree::ptree& properties) {
 #ifdef HAVE_PROMETHEUS_SUPPORT
     static const std::string PROMETHEUS_ENABLED("prometheus.enabled");
     static const std::string PROMETHEUS_LOCALHOST_ONLY("prometheus.localhost-only");
+    static const std::string PROMETHEUS_EXPOSE_EPSVC_NAN("prometheus.expose-epsvc-nan");
     static const std::string PROMETHEUS_EP_ATTRIBUTES("prometheus.ep-attributes");
 #endif
     static const std::string ENDPOINT_SOURCE_FSPATH("endpoint-sources.filesystem");
@@ -193,6 +196,7 @@ void Agent::setProperties(const boost::property_tree::ptree& properties) {
     static const std::string OPFLEX_PRR_INTERVAL("opflex.timers.prr");
     static const std::string OPFLEX_HANDSHAKE("opflex.timers.handshake-timeout");
     static const std::string DISABLED_FEATURES("feature.disabled");
+    static const std::string BEHAVIOR_L34FLOWS_WITHOUT_SUBNET("behavior.l34flows-without-subnet");
 
     // set feature flags to true
     clearFeatureFlags();
@@ -253,6 +257,12 @@ void Agent::setProperties(const boost::property_tree::ptree& properties) {
             disabledFeaturesSet.insert(v.second.data());
     }
 
+    optional<bool> behaviorAddL34FlowsWithoutSubnet =
+        properties.get_optional<bool>(BEHAVIOR_L34FLOWS_WITHOUT_SUBNET);
+    if (behaviorAddL34FlowsWithoutSubnet) {
+        behaviorL34FlowsWithoutSubnet = behaviorAddL34FlowsWithoutSubnet.get();
+    }
+
 #ifdef HAVE_PROMETHEUS_SUPPORT
     boost::optional<bool> prometheusIsEnabled =
                 properties.get_optional<bool>(PROMETHEUS_ENABLED);
@@ -266,6 +276,13 @@ void Agent::setProperties(const boost::property_tree::ptree& properties) {
     if (prometheusLocalHostOnly) {
         if (prometheusLocalHostOnly.get() == true)
             prometheusExposeLocalHostOnly = true;
+    }
+
+    boost::optional<bool> prometheusEpSvcNan =
+                properties.get_optional<bool>(PROMETHEUS_EXPOSE_EPSVC_NAN);
+    if (prometheusEpSvcNan) {
+        if (prometheusEpSvcNan.get() == true)
+            prometheusExposeEpSvcNan = true;
     }
 
     optional<const ptree&> epAttributes =
@@ -456,8 +473,12 @@ void Agent::setProperties(const boost::property_tree::ptree& properties) {
         if (prr_timer < 15) {
            prr_timer = 15;  /* min is 15 seconds */
         }
+        LOG(INFO) << "prr timer set to " << prr_timer << " secs";
     }
+<<<<<<< HEAD
     LOG(INFO) << "prr timer set to " << prr_timer << " secs";
+=======
+>>>>>>> origin/master
 
     boost::optional<uint32_t> handshakeOpt = properties.get_optional<uint32_t>(OPFLEX_HANDSHAKE);
     if (handshakeOpt) {
@@ -572,7 +593,8 @@ void Agent::start() {
     // instantiate other components
 #ifdef HAVE_PROMETHEUS_SUPPORT
     if (prometheusEnabled) {
-        prometheusManager.start(prometheusExposeLocalHostOnly);
+        prometheusManager.start(prometheusExposeLocalHostOnly,
+                                prometheusExposeEpSvcNan);
     } else {
         LOG(DEBUG) << "prometheus not enabled";
     }

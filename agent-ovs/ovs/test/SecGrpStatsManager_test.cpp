@@ -54,12 +54,26 @@ namespace opflexagent {
 
 static const uint32_t LAST_PACKET_COUNT = 379; // for removed flow entry
 
+class MockSecGrpStatsManager : public SecGrpStatsManager {
+public:
+    MockSecGrpStatsManager(Agent *agent_,
+                           IdGenerator& idGen_,
+                           SwitchManager& switchManager_,
+                           long timer_interval_)
+        : SecGrpStatsManager(agent_, idGen_, switchManager_, timer_interval_) {};
+
+    void testInjectTxnId (uint32_t txn_id) {
+        std::lock_guard<mutex> lock(txnMtx);
+        txns.insert(txn_id);
+    }
+};
+
 class SecGrpStatsManagerFixture : public PolicyStatsManagerFixture {
 
 public:
     SecGrpStatsManagerFixture() : PolicyStatsManagerFixture(),
                                   secGrpStatsManager(&agent, idGen,
-                                                     switchManager, 10) {
+                                                     switchManager, 100000) {
         idGen.initNamespace("l24classifierRule");
         idGen.initNamespace("secGroupSet");
         idGen.initNamespace("secGroup");
@@ -70,8 +84,79 @@ public:
     virtual ~SecGrpStatsManagerFixture() {
         stop();
     }
-    SecGrpStatsManager secGrpStatsManager;
+#ifdef HAVE_PROMETHEUS_SUPPORT
+    virtual void verifyPromMetrics(shared_ptr<L24Classifier> classifier,
+                            uint32_t pkts,
+                            uint32_t bytes,
+                            bool isTx=false) override;
+#endif
+    MockSecGrpStatsManager secGrpStatsManager;
 };
+
+#ifdef HAVE_PROMETHEUS_SUPPORT
+void SecGrpStatsManagerFixture::
+verifyPromMetrics (shared_ptr<L24Classifier> classifier,
+                   uint32_t pkts,
+                   uint32_t bytes,
+                   bool isTx)
+{
+    std::string s_rx_bytes, s_rx_pkts, s_tx_bytes, s_tx_pkts;
+    if (classifier == classifier1) {
+        s_tx_bytes = "opflex_sg_tx_bytes{classifier=\"tenant:tenant0,policy:"\
+                     "classifier1,[etype:2048,proto:6,dport:80]\"} "\
+                     + boost::lexical_cast<std::string>(bytes) + ".000000";
+        s_rx_bytes = "opflex_sg_rx_bytes{classifier=\"tenant:tenant0,policy:"\
+                     "classifier1,[etype:2048,proto:6,dport:80]\"} "\
+                     + boost::lexical_cast<std::string>(bytes) + ".000000";
+        s_tx_pkts = "opflex_sg_tx_packets{classifier=\"tenant:tenant0,policy:"\
+                    "classifier1,[etype:2048,proto:6,dport:80]\"} "\
+                    + boost::lexical_cast<std::string>(pkts) + ".000000";
+        s_rx_pkts = "opflex_sg_rx_packets{classifier=\"tenant:tenant0,policy:"\
+                    "classifier1,[etype:2048,proto:6,dport:80]\"} "\
+                    + boost::lexical_cast<std::string>(pkts) + ".000000";
+    } else if (classifier == classifier2) {
+        s_tx_bytes = "opflex_sg_tx_bytes{classifier=\"tenant:tenant0,policy:"\
+                     "classifier2,[etype:2054,]\"} "\
+                     + boost::lexical_cast<std::string>(bytes) + ".000000";
+        s_rx_bytes = "opflex_sg_rx_bytes{classifier=\"tenant:tenant0,policy:"\
+                     "classifier2,[etype:2054,]\"} "\
+                     + boost::lexical_cast<std::string>(bytes) + ".000000";
+        s_tx_pkts = "opflex_sg_tx_packets{classifier=\"tenant:tenant0,policy:"\
+                    "classifier2,[etype:2054,]\"} "\
+                    + boost::lexical_cast<std::string>(pkts) + ".000000";
+        s_rx_pkts = "opflex_sg_rx_packets{classifier=\"tenant:tenant0,policy:"\
+                    "classifier2,[etype:2054,]\"} "\
+                    + boost::lexical_cast<std::string>(pkts) + ".000000";
+    } else {
+        s_tx_bytes = "opflex_sg_tx_bytes{classifier=\"tenant:tenant0,policy:"\
+                     "classifier3,[etype:2048,proto:6,dport:80-85,]\"} "\
+                     + boost::lexical_cast<std::string>(bytes) + ".000000";
+        s_rx_bytes = "opflex_sg_rx_bytes{classifier=\"tenant:tenant0,policy:"\
+                     "classifier3,[etype:2048,proto:6,dport:80-85,]\"} "\
+                     + boost::lexical_cast<std::string>(bytes) + ".000000";
+        s_tx_pkts = "opflex_sg_tx_packets{classifier=\"tenant:tenant0,policy:"\
+                    "classifier3,[etype:2048,proto:6,dport:80-85,]\"} "\
+                    + boost::lexical_cast<std::string>(pkts) + ".000000";
+        s_rx_pkts = "opflex_sg_rx_packets{classifier=\"tenant:tenant0,policy:"\
+                    "classifier3,[etype:2048,proto:6,dport:80-85,]\"} "\
+                    + boost::lexical_cast<std::string>(pkts) + ".000000";
+    }
+
+    const std::string& output = BaseFixture::getOutputFromCommand(cmd);
+    size_t pos = std::string::npos;
+    if (isTx) {
+        pos = output.find(s_tx_pkts);
+        BOOST_CHECK_NE(pos, std::string::npos);
+        pos = output.find(s_tx_bytes);
+        BOOST_CHECK_NE(pos, std::string::npos);
+    } else {
+        pos = output.find(s_rx_pkts);
+        BOOST_CHECK_NE(pos, std::string::npos);
+        pos = output.find(s_rx_bytes);
+        BOOST_CHECK_NE(pos, std::string::npos);
+    }
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE(SecGrpStatsManager_test)
 
@@ -85,34 +170,35 @@ BOOST_FIXTURE_TEST_CASE(testFlowMatchStats, SecGrpStatsManagerFixture) {
                               OFPTYPE_FLOW_STATS_REPLY, NULL);
     LOG(DEBUG) << "### SecGrpClassifierCounter flow stats in start";
     // testing one flow only
-    testOneFlow(accPortConn,classifier1,
-                AccessFlowManager::SEC_GROUP_IN_TABLE_ID,1,&secGrpStatsManager);
-    // 2 entries in flow table now - testing second flow
-    testOneFlow(accPortConn,classifier2,
+    testOneFlow<MockSecGrpStatsManager>(accPortConn,classifier1,
                 AccessFlowManager::SEC_GROUP_IN_TABLE_ID,
-                2,
+                1, false, &secGrpStatsManager);
+    // 2 entries in flow table now - testing second flow
+    testOneFlow<MockSecGrpStatsManager>(accPortConn,classifier2,
+                AccessFlowManager::SEC_GROUP_IN_TABLE_ID,
+                2, false,
                 &secGrpStatsManager);
     // changing flow table entry
     // Note: If the portNum is set as 2, then it clashes with classifier2
     // entry. So first classifier1 entry will get deleted. No new counter
     // objeects will get generated and verifyflowstats will fail.
-    testOneFlow(accPortConn,classifier1,
+    testOneFlow<MockSecGrpStatsManager>(accPortConn,classifier1,
                 AccessFlowManager::SEC_GROUP_IN_TABLE_ID,
-                3,
+                3, true,
                 &secGrpStatsManager);
     LOG(DEBUG) << "### SecGrpClassifierCounter flow stats out start";
     // same 3 steps above for OUT table
-    testOneFlow(accPortConn,classifier1,
+    testOneFlow<MockSecGrpStatsManager>(accPortConn,classifier1,
                 AccessFlowManager::SEC_GROUP_OUT_TABLE_ID,
-                1,
+                1, false,
                 &secGrpStatsManager);
-    testOneFlow(accPortConn,classifier2,
+    testOneFlow<MockSecGrpStatsManager>(accPortConn,classifier2,
                 AccessFlowManager::SEC_GROUP_OUT_TABLE_ID,
-                2,
+                2, false,
                 &secGrpStatsManager);
-    testOneFlow(accPortConn,classifier1,
+    testOneFlow<MockSecGrpStatsManager>(accPortConn,classifier1,
                 AccessFlowManager::SEC_GROUP_OUT_TABLE_ID,
-                3,
+                3, true,
                 &secGrpStatsManager);
     LOG(DEBUG) << "### SecGrpClassifierCounter flow stats stop";
     secGrpStatsManager.stop();
@@ -156,9 +242,15 @@ BOOST_FIXTURE_TEST_CASE(testFlowRemoved, SecGrpStatsManagerFixture) {
 
     secGrpStatsManager.Handle(&accPortConn,
                               OFPTYPE_FLOW_REMOVED, res_msg, &fentry);
+    ofpbuf_delete(res_msg);
+
+    // Collect counts related to Rx
     secGrpStatsManager.on_timer(ec);
 
-    ofpbuf_delete(res_msg);
+    // 2nd delete received from ovs for same flow, ideally this is a no-op.
+    // But since on-timer is called table state's flow would have created
+    // an entry in newCounterMap. So the flow removed message will lead
+    // to accumulation of stats to prom metric.
     res_msg = makeFlowRemovedMessage_2(&accPortConn,
                                        LAST_PACKET_COUNT,
                                        AccessFlowManager::SEC_GROUP_IN_TABLE_ID,
@@ -168,6 +260,7 @@ BOOST_FIXTURE_TEST_CASE(testFlowRemoved, SecGrpStatsManagerFixture) {
     secGrpStatsManager.Handle(&accPortConn,
                               OFPTYPE_FLOW_REMOVED, res_msg, &fentry);
     ofpbuf_delete(res_msg);
+
     res_msg =
         makeFlowRemovedMessage_2(&accPortConn,
                                  LAST_PACKET_COUNT,
@@ -193,6 +286,7 @@ BOOST_FIXTURE_TEST_CASE(testFlowRemoved, SecGrpStatsManagerFixture) {
     // Call on_timer function to process the stats collected
     // and generate Genie objects for stats
 
+    // Collect counts relateed to Tx
     secGrpStatsManager.on_timer(ec);
 
     // calculate expected packet count and byte count
@@ -201,11 +295,13 @@ BOOST_FIXTURE_TEST_CASE(testFlowRemoved, SecGrpStatsManagerFixture) {
     verifyFlowStats(classifier3,
                     LAST_PACKET_COUNT,
                     LAST_PACKET_COUNT * PACKET_SIZE,
+                    true,
                     AccessFlowManager::SEC_GROUP_IN_TABLE_ID,
                     &secGrpStatsManager);
     verifyFlowStats(classifier3,
                     LAST_PACKET_COUNT,
                     LAST_PACKET_COUNT * PACKET_SIZE,
+                    false,
                     AccessFlowManager::SEC_GROUP_OUT_TABLE_ID,
                     &secGrpStatsManager);
     LOG(DEBUG) << "### SecGrpClassifierCounter flow removed stop";
@@ -220,7 +316,7 @@ BOOST_FIXTURE_TEST_CASE(testCircularBuffer, SecGrpStatsManagerFixture) {
     LOG(DEBUG) << "### SecGrpClassifierCounter circbuffer start";
     // Add flows in switchManager
 
-    testCircBuffer(accPortConn,
+    testCircBuffer<MockSecGrpStatsManager>(accPortConn,
                    classifier3,
                    AccessFlowManager::SEC_GROUP_IN_TABLE_ID,
                    2,
@@ -238,8 +334,9 @@ BOOST_FIXTURE_TEST_CASE(testSecGrpDelete, SecGrpStatsManagerFixture) {
     secGrpStatsManager.Handle(&accPortConn,
                               OFPTYPE_FLOW_STATS_REPLY, NULL);
     // testing one flow only
-    testOneFlow(accPortConn,classifier1,
-                AccessFlowManager::SEC_GROUP_IN_TABLE_ID,1,&secGrpStatsManager);
+    testOneFlow<MockSecGrpStatsManager>(accPortConn,classifier1,
+                AccessFlowManager::SEC_GROUP_IN_TABLE_ID,
+                1, false, &secGrpStatsManager);
     Mutator mutator(agent.getFramework(), "policyreg");
 
     // Note: In UTs, deleting the sg doesnt trigger classifier delete

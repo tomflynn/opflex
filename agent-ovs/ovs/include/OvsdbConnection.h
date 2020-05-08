@@ -53,7 +53,7 @@ class OvsdbConnection : public opflex::jsonrpc::RpcConnection {
     /**
      * Construct an OVSDB connection
      */
-    OvsdbConnection() : opflex::jsonrpc::RpcConnection(), peer(nullptr), connected(false) {}
+    OvsdbConnection(bool useLocalTcpPort) : opflex::jsonrpc::RpcConnection(), peer(nullptr), connected(false), ovsdbUseLocalTcpPort(useLocalTcpPort) {}
 
     /**
      * destructor
@@ -135,11 +135,10 @@ class OvsdbConnection : public opflex::jsonrpc::RpcConnection {
     /**
      * send transaction request
      *
-     * @param[in] reqId request ID
      * @param[in] requests list of Transact messages
      * @param[in] trans callback
      */
-    virtual void sendTransaction(const uint64_t& reqId, const list<JsonRpcTransactMessage>& requests, Transaction* trans);
+    virtual void sendTransaction(const list<JsonRpcTransactMessage>& requests, Transaction* trans);
 
     /**
      * call back for transaction response
@@ -157,15 +156,34 @@ class OvsdbConnection : public opflex::jsonrpc::RpcConnection {
     /**
      * mutex used for synchronizing JSON/RPC
      * request and response
+     *
+     * static for now as we only have a single OVSDB connection
      */
-    mutex mtx;
+    static mutex ovsdbMtx;
+
+    /**
+     * set the next request ID
+     * @param id_ request id
+     */
+    void setNextId(uint64_t id_) {
+        unique_lock<mutex> lock(transactionMutex);
+        id = id_;
+    }
+
+protected:
+
+    /**
+     * Get the next req ID
+     * @return req ID
+     */
+    uint64_t getNextId() { return ++id; }
 
 private:
 
     yajr::Peer* peer;
 
     typedef struct req_cb_data_ {
-        TransactReq* req;
+        shared_ptr<TransactReq> req;
         yajr::Peer* peer;
     } req_cb_data;
 
@@ -176,6 +194,8 @@ private:
     unordered_map<uint64_t, Transaction*> transactions;
     std::atomic<bool> connected;
     mutex transactionMutex;
+    bool ovsdbUseLocalTcpPort;
+    uint64_t id = 0;
 };
 
 

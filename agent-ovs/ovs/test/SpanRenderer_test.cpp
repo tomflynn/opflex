@@ -13,7 +13,8 @@
 #include <opflexagent/logging.h>
 #include <opflexagent/test/BaseFixture.h>
 #include <SpanRenderer.h>
-#include "MockJsonRpc.h"
+#include "MockRpcConnection.h"
+#include <opflexagent/SpanSessionState.h>
 
 namespace opflexagent {
 
@@ -32,16 +33,22 @@ public:
         spr->connect();
     }
 
-    virtual ~SpanRendererFixture() {};
+    virtual ~SpanRendererFixture() {
+        spr->stop();
+    };
 
     shared_ptr<SpanRenderer> spr;
     unique_ptr<OvsdbConnection> conn;
 };
 
 static bool verifyCreateDestroy(const shared_ptr<SpanRenderer>& spr) {
+<<<<<<< HEAD
     spr->jRpc->setNextId(1000);
+=======
+    spr->setNextId(1000);
+>>>>>>> origin/master
     JsonRpc::mirror mir;
-    if (!spr->jRpc->getOvsdbMirrorConfig(mir)) {
+    if (!spr->jRpc->getOvsdbMirrorConfig("abc",mir)) {
         return false;
     }
     string erspanUuid;
@@ -49,47 +56,48 @@ static bool verifyCreateDestroy(const shared_ptr<SpanRenderer>& spr) {
     if (erspanUuid.empty()) {
         return false;
     }
-    JsonRpc::BrPortResult res;
-    if (!spr->jRpc->getBridgePortList("br-int", res)) {
-        return false;
-    }
-    tuple<string, set<string>> ports = make_tuple(res.brUuid, res.portUuids);
-    if (!spr->jRpc->updateBridgePorts(ports, erspanUuid, false)) {
+    if (!spr->jRpc->updateBridgePorts("br-int", erspanUuid, false)) {
         return false;
     }
 
-    if (!spr->jRpc->deleteMirror("br-int")) {
+    string sessionName("abc");
+    if (!spr->deleteMirror(sessionName)) {
         return false;
     }
-    shared_ptr<JsonRpc::erspan_ifc_v1> ep = make_shared<JsonRpc::erspan_ifc_v1>();
-    ep->name = "erspan";
-    ep->remote_ip = "10.20.120.240";
-    ep->erspan_idx = 1;
-    ep->erspan_ver = 1;
-    ep->key = 1;
-    if (!spr->jRpc->addErspanPort("br-int", ep)) {
+    ErspanParams params;
+    params.setPortName("erspan");
+    params.setRemoteIp("10.20.120.240");
+    params.setVersion(1);
+    if (!spr->jRpc->addErspanPort("br-int", params)) {
         return false;
     }
-
     set<string> src_ports = {"p1-tap", "p2-tap"};
     set<string> dst_ports = {"p1-tap", "p2-tap"};
     set<string> out_ports = {"erspan"};
-    mir.src_ports.insert(src_ports.begin(), src_ports.end());
-    mir.dst_ports.insert(dst_ports.begin(), dst_ports.end());
-    mir.out_ports.insert(out_ports.begin(), out_ports.end());
-    spr->jRpc->addMirrorData("sess1", mir);
-
-    string brUuid;
-    spr->jRpc->getBridgeUuid("br-int", brUuid);
-    if (brUuid.empty()) {
-        return false;
-    }
-    return spr->jRpc->createMirror(brUuid, "sess1");
+    return spr->createMirror("sess1", src_ports, dst_ports);
 }
 
 BOOST_FIXTURE_TEST_CASE( verify_getport, SpanRendererFixture ) {
-    WAIT_FOR(verifyCreateDestroy(spr), 500);
+    BOOST_CHECK_EQUAL(true,verifyCreateDestroy(spr));
 }
+
+BOOST_FIXTURE_TEST_CASE( verify_add_remote_port, SpanRendererFixture ) {
+    spr->setNextId(1012);
+
+    BOOST_CHECK_EQUAL(true, spr->addErspanPort(ERSPAN_PORT_PREFIX, "3.3.3.3", 2));
+    BOOST_CHECK_EQUAL(true, spr->deleteErspanPort(ERSPAN_PORT_PREFIX));
+}
+
+BOOST_FIXTURE_TEST_CASE( verify_get_erspan_params, SpanRendererFixture ) {
+    spr->setNextId(1015);
+
+    ErspanParams params;
+    BOOST_CHECK_EQUAL(true, spr->jRpc->getCurrentErspanParams(ERSPAN_PORT_PREFIX, params));
+
+    URI spanUri("/SpanUniverse/SpanSession/ugh-vspan/");
+    spr->spanUpdated(spanUri);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 }

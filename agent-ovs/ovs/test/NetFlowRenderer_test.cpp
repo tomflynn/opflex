@@ -13,7 +13,13 @@
 #include <opflexagent/logging.h>
 #include <opflexagent/test/BaseFixture.h>
 #include <NetFlowRenderer.h>
+<<<<<<< HEAD
 #include "MockJsonRpc.h"
+=======
+#include "MockRpcConnection.h"
+
+#include <modelgbp/netflow/CollectorVersionEnumT.hpp>
+>>>>>>> origin/master
 
 namespace opflexagent {
 
@@ -32,13 +38,20 @@ public:
         nfr->connect();
     }
 
+<<<<<<< HEAD
     virtual ~NetFlowRendererFixture() {};
+=======
+    virtual ~NetFlowRendererFixture() {
+        nfr->stop();
+    };
+>>>>>>> origin/master
 
     shared_ptr<NetFlowRenderer> nfr;
     unique_ptr<OvsdbConnection> conn;
 };
 
 static bool verifyCreateDestroy(const shared_ptr<NetFlowRenderer>& nfr) {
+<<<<<<< HEAD
     nfr->jRpc->setNextId(2000);
     string bridgeUuid;
     nfr->jRpc->getBridgeUuid("br-int", bridgeUuid);
@@ -49,11 +62,29 @@ static bool verifyCreateDestroy(const shared_ptr<NetFlowRenderer>& nfr) {
     nfr->jRpc->setNextId(2001);
     result = result && nfr->jRpc->createIpfix(bridgeUuid, "5.5.5.5", 500);
     result = result && nfr->jRpc->deleteIpfix(bridgeUuid);
+=======
+    nfr->setNextId(2000);
+
+    bool result = nfr->createNetFlow("5.5.5.6", 10);
+    URI exporterURI("/PolicyUniverse/");
+    ExporterConfigState state(exporterURI, "test");
+    state.setVersion(1); // modelgbp::netflow::CollectorVersionEnumT::CONST_V5
+    shared_ptr<ExporterConfigState> statePtr = make_shared<ExporterConfigState>(state);
+    nfr->exporterDeleted(statePtr);
+
+    result = result && nfr->createIpfix("5.5.5.5", 500);
+    statePtr->setVersion(2); // modelgbp::netflow::CollectorVersionEnumT::CONST_V9
+    nfr->exporterDeleted(statePtr);
+>>>>>>> origin/master
     return result;
 }
 
 BOOST_FIXTURE_TEST_CASE( verify_createdestroy, NetFlowRendererFixture ) {
+<<<<<<< HEAD
     WAIT_FOR(verifyCreateDestroy(nfr), 1);
+=======
+    BOOST_CHECK_EQUAL(true, verifyCreateDestroy(nfr));
+>>>>>>> origin/master
 }
 BOOST_AUTO_TEST_SUITE_END()
 

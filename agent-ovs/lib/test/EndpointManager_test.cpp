@@ -137,7 +137,7 @@ public:
     void rmEpAttributeSet() {
         EpAttributeSet::remove(framework, "72ffb982-b2d5-4ae4-91ac-0dd61daf527a");
     }
-    opflex::modb::URI getExtL3BDURI(std::string& name) {
+    static opflex::modb::URI getExtL3BDURI(std::string& name) {
         return URIBuilder().addElement("PolicyUniverse")
                .addElement("PolicySpace")
                .addElement("test")
@@ -674,7 +674,8 @@ BOOST_FIXTURE_TEST_CASE( fssource, FSEndpointFixture ) {
        << "\"mac\":\"10:ff:00:a3:01:00\","
        << "\"ip\":[\"10.0.0.1\",\"10.0.0.2\"],"
        << "\"interface-name\":\"veth0\","
-       << "\"endpoint-group\":\"/PolicyUniverse/PolicySpace/test/GbpEpGroup/epg/\","
+       << "\"policy-space-name\":\"test\","
+       << "\"endpoint-group-name\":\"epg\","
        << "\"security-group\":["
        << "{\"policy-space\":\"sg1-space1\",\"name\":\"sg1\"}"
        << "],"
@@ -796,6 +797,7 @@ public:
     virtual void remoteEndpointUpdated(const std::string& uuid) {
         std::unique_lock<std::mutex> guard(mutex);
         updates.insert(uuid);
+        LOG(DEBUG) << "updated uuid: " << uuid << ", total#" << updates.size();
     };
 
     size_t numUpdates() {
@@ -843,8 +845,10 @@ BOOST_FIXTURE_TEST_CASE( remoteEndpoint, BaseFixture ) {
     WAIT_FOR(agent.getPolicyManager().groupExists(epg0->getURI()), 500);
     WAIT_FOR(agent.getPolicyManager().groupExists(epg1->getURI()), 500);
     WAIT_FOR(listener.numUpdates() == 3, 500);
-    listener.clear();
 
+    // Wait for egDomain and remoteEp updates to settle down
+    usleep(100000);
+    listener.clear();
     // update epg for ep
     rep1->addInvRemoteInventoryEpToGroupRSrc()
         ->setTargetEpGroup(epg1->getURI());
@@ -1002,6 +1006,7 @@ BOOST_FIXTURE_TEST_CASE( fsextsource, FSEndpointFixture ) {
         .build();
     WAIT_FOR(hasPolicyEntry<ExternalL3Ep>(framework, extL3Ep3), 500);
 
+    watcher.stop();
 }
 
 BOOST_FIXTURE_TEST_CASE( fsextsvisource, FSEndpointFixture ) {
@@ -1028,7 +1033,7 @@ BOOST_FIXTURE_TEST_CASE( fsextsvisource, FSEndpointFixture ) {
             "83f18f0b-80f7-46e2-b06c-4d9487b0c793") != nullptr), 500);
     auto extSviEp = agent.getEndpointManager().getEndpoint(
             "83f18f0b-80f7-46e2-b06c-4d9487b0c793");
-    BOOST_CHECK(extSviEp->isExternal() == true);
+    BOOST_CHECK(extSviEp->isExternal());
     BOOST_CHECK(extSviEp->getExtEncapId() == 1000);
 
     // check for removing an endpoint
@@ -1037,6 +1042,7 @@ BOOST_FIXTURE_TEST_CASE( fsextsvisource, FSEndpointFixture ) {
     WAIT_FOR((agent.getEndpointManager().getEndpoint(
             "83f18f0b-80f7-46e2-b06c-4d9487b0c793") == nullptr), 500);
 
+    watcher.stop();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

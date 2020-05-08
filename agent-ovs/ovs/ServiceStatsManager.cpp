@@ -59,6 +59,7 @@ void ServiceStatsManager::stop() {
     PolicyStatsManager::stop();
 }
 
+<<<<<<< HEAD:agent-ovs/ovs/ServiceStatsManager.cpp
 void ServiceStatsManager::on_timer(const error_code& ec) {
     if (ec) {
         std::lock_guard<std::mutex> lock(timer_mutex);
@@ -68,6 +69,10 @@ void ServiceStatsManager::on_timer(const error_code& ec) {
         return;
     }
 
+=======
+void ServiceStatsManager::update_state (const error_code& ec)
+{
+>>>>>>> origin/master:agent-ovs/ovs/ServiceStatsManager.cpp
     // Request Switch Manager to provide flow entries
     {
         TableState::cookie_callback_t cb_func;
@@ -92,6 +97,55 @@ void ServiceStatsManager::on_timer(const error_code& ec) {
         // have already created the objects. If its not resolved,
         // then new objects will get created 
         updateServiceStatsObjects(&statsCountersMap);
+<<<<<<< HEAD:agent-ovs/ovs/ServiceStatsManager.cpp
+    }
+
+    {
+        TableState::cookie_callback_t cb_func;
+        cb_func = [this](uint64_t cookie, uint16_t priority,
+                         const struct match& match) {
+            updateFlowEntryMap(svhState, cookie, priority, match);
+        };
+
+        // svc-tgt rx stats handling based on flows in SERVICE_NEXTHOP table
+        std::lock_guard<std::mutex> lock(pstatMtx);
+
+        // create flowcountermap entries for new flows
+        switchManager.forEachCookieMatch(IntFlowManager::SERVICE_NEXTHOP_TABLE_ID,
+                                         cb_func);
+
+        // aggregate statsCounterMap based on FlowCounterState
+        ServiceCounterMap_t svhCountersMap;
+        on_timer_base(ec, svhState, svhCountersMap);
+
+        // Update service stats objects. ServiceManager would
+        // have already created the objects.
+        updateServiceStatsObjects(&svhCountersMap);
+    }
+
+    {
+        TableState::cookie_callback_t cb_func;
+        cb_func = [this](uint64_t cookie, uint16_t priority,
+                         const struct match& match) {
+            updateFlowEntryMap(svrState, cookie, priority, match);
+        };
+
+        // svc-tgt tx stats handling based on flows in SERVICE_REV table
+        std::lock_guard<std::mutex> lock(pstatMtx);
+
+        // create flowcountermap entries for new flows
+        switchManager.forEachCookieMatch(IntFlowManager::SERVICE_REV_TABLE_ID,
+                                         cb_func);
+
+        // aggregate svrCounterMap based on FlowCounterState
+        ServiceCounterMap_t svrCountersMap;
+        on_timer_base(ec, svrState, svrCountersMap);
+
+        // Update service stats objects. ServiceManager would
+        // have already created the objects.
+        updateServiceStatsObjects(&svrCountersMap);
+=======
+>>>>>>> origin/master:agent-ovs/ovs/ServiceStatsManager.cpp
     }
 
     {
@@ -139,10 +193,25 @@ void ServiceStatsManager::on_timer(const error_code& ec) {
         // have already created the objects.
         updateServiceStatsObjects(&svrCountersMap);
     }
+}
 
+void ServiceStatsManager::on_timer(const error_code& ec) {
+    if (ec) {
+        std::lock_guard<std::mutex> lock(timer_mutex);
+        // shut down the timer when we get a cancellation
+        LOG(DEBUG) << "Resetting timer, error: " << ec.message();
+        timer.reset();
+        return;
+    }
+
+    update_state(ec);
     sendRequest(IntFlowManager::STATS_TABLE_ID);
     sendRequest(IntFlowManager::SERVICE_NEXTHOP_TABLE_ID);
     sendRequest(IntFlowManager::SERVICE_REV_TABLE_ID);
+<<<<<<< HEAD:agent-ovs/ovs/ServiceStatsManager.cpp
+=======
+
+>>>>>>> origin/master:agent-ovs/ovs/ServiceStatsManager.cpp
     if (!stopping) {
         std::lock_guard<std::mutex> lock(timer_mutex);
         if (timer) {

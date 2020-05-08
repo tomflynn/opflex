@@ -45,7 +45,11 @@ public:
     UdpServer(PacketLogHandler &logHandler,
             boost::asio::io_service& io_service_,
                boost::asio::ip::address &addr, uint16_t port)
+<<<<<<< HEAD
     : pktLogger(logHandler), server_io(io_service_), serverSocket(io_service_),
+=======
+    : pktLogger(logHandler), serverSocket(io_service_),
+>>>>>>> origin/master
             localEndpoint(addr, port), stopped(false) {
     }
     /**
@@ -54,7 +58,11 @@ public:
      */
     bool startListener() {
         boost::system::error_code ec;
+<<<<<<< HEAD
 	serverSocket.open(localEndpoint.protocol());
+=======
+        serverSocket.open(localEndpoint.protocol());
+>>>>>>> origin/master
         boost::asio::socket_base::reuse_address option(true);
         serverSocket.set_option(boost::asio::socket_base::reuse_address(true),
 			ec);
@@ -84,6 +92,7 @@ public:
     void stop() {
         boost::system::error_code ec;
         stopped = true;
+        serverSocket.shutdown(boost::asio::ip::udp::socket::shutdown_both);
         serverSocket.cancel(ec);
         serverSocket.close(ec);
     }

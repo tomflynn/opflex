@@ -48,13 +48,31 @@ namespace opflexagent {
 
 static const uint32_t LAST_PACKET_COUNT = 379; // for removed flow entry
 
+class MockContractStatsManager : public ContractStatsManager {
+public:
+    MockContractStatsManager(Agent *agent_,
+                             IdGenerator& idGen_,
+                             SwitchManager& switchManager_,
+                             long timer_interval_)
+        : ContractStatsManager(agent_, idGen_, switchManager_, timer_interval_) {};
+
+    void testInjectTxnId (uint32_t txn_id) {
+        std::lock_guard<mutex> lock(txnMtx);
+        txns.insert(txn_id);
+    }
+};
+
 class ContractStatsManagerFixture : public PolicyStatsManagerFixture {
 
 public:
     ContractStatsManagerFixture() : PolicyStatsManagerFixture(),
+                                    intFlowManager(agent, switchManager, idGen,
+                                                   ctZoneManager, tunnelEpManager),
                                     contractStatsManager(&agent, idGen,
-                                                         switchManager, 10),
+                                                         switchManager, 300),
                                     policyManager(agent.getPolicyManager()) {
+        switchManager.setMaxFlowTables(IntFlowManager::NUM_FLOW_TABLES);
+        intFlowManager.start();
         createObjects();
         createPolicyObjects();
         idGen.initNamespace("l24classifierRule");
@@ -62,16 +80,70 @@ public:
         switchManager.setMaxFlowTables(IntFlowManager::NUM_FLOW_TABLES);
     }
     virtual ~ContractStatsManagerFixture() {
+        intFlowManager.stop();
         stop();
     }
     void verifyRoutingDomainDropStats(shared_ptr<RoutingDomain> rd,
                                       uint32_t packet_count,
                                       uint32_t byte_count);
-    ContractStatsManager contractStatsManager;
+    void waitForRdDropEntry(void);
+#ifdef HAVE_PROMETHEUS_SUPPORT
+    virtual void verifyPromMetrics(shared_ptr<L24Classifier> classifier,
+                            uint32_t pkts,
+                            uint32_t bytes,
+                            bool isTx=false) override;
+    void verifyRdDropPromMetrics(uint32_t pkts, uint32_t bytes);
+#endif
+    IntFlowManager  intFlowManager;
+    MockContractStatsManager contractStatsManager;
     PolicyManager& policyManager;
 private:
+    bool checkNewFlowMapSize(size_t pol_table_size);
 };
 
+#ifdef HAVE_PROMETHEUS_SUPPORT
+void ContractStatsManagerFixture::
+verifyPromMetrics (shared_ptr<L24Classifier> classifier,
+                   uint32_t pkts,
+                   uint32_t bytes,
+                   bool isTx)
+{
+    const std::string& s_pkts = "opflex_contract_packets{classifier=\"tenant:tenant0,"\
+                                "policy:classifier3,[etype:2048,proto:6,dport:80-85,]\""\
+                                ",dst_epg=\"tenant:tenant0,policy:epg2\",src_epg=\""\
+                                "tenant:tenant0,policy:epg1\"} "\
+                                + boost::lexical_cast<std::string>(pkts) + ".000000";
+    const std::string& s_bytes = "opflex_contract_bytes{classifier=\"tenant:tenant0,"\
+                                 "policy:classifier3,[etype:2048,proto:6,dport:80-85,]\""\
+                                 ",dst_epg=\"tenant:tenant0,policy:epg2\",src_epg=\""\
+                                 "tenant:tenant0,policy:epg1\"} "\
+                                 + boost::lexical_cast<std::string>(bytes) + ".000000";
+
+    const std::string& output = BaseFixture::getOutputFromCommand(cmd);
+    size_t pos = std::string::npos;
+    pos = output.find(s_pkts);
+    BOOST_CHECK_NE(pos, std::string::npos);
+    pos = output.find(s_bytes);
+    BOOST_CHECK_NE(pos, std::string::npos);
+}
+
+void ContractStatsManagerFixture::
+verifyRdDropPromMetrics (uint32_t pkts,
+                         uint32_t bytes)
+{
+    const std::string& s_pkts = "opflex_policy_drop_packets{routing_domain=\"tenant0:rd0\"} "\
+                                + boost::lexical_cast<std::string>(pkts) + ".000000";
+    const std::string& s_bytes = "opflex_policy_drop_bytes{routing_domain=\"tenant0:rd0\"} "\
+                                 + boost::lexical_cast<std::string>(bytes) + ".000000";
+
+    const std::string& output = BaseFixture::getOutputFromCommand(cmd);
+    size_t pos = std::string::npos;
+    pos = output.find(s_pkts);
+    BOOST_CHECK_NE(pos, std::string::npos);
+    pos = output.find(s_bytes);
+    BOOST_CHECK_NE(pos, std::string::npos);
+}
+#endif
 
 void ContractStatsManagerFixture::
 verifyRoutingDomainDropStats(shared_ptr<RoutingDomain> rd,
@@ -83,21 +155,25 @@ verifyRoutingDomainDropStats(shared_ptr<RoutingDomain> rd,
 
     auto uuid =
         boost::lexical_cast<string>(contractStatsManager.getAgentUUID());
+    WAIT_FOR_DO_ONFAIL(su.get()->resolveGbpeRoutingDomainDropCounter(uuid,
+                                    contractStatsManager.getCurrDropGenId(),
+                                    rd->getURI().toString()),
+                                    500,, LOG(ERROR) << "Obj not resolved";);
     optional<shared_ptr<RoutingDomainDropCounter> > myCounter =
         su.get()->resolveGbpeRoutingDomainDropCounter(uuid,
                                                       contractStatsManager
                                                       .getCurrDropGenId(),
                                                       rd->getURI().toString());
-    if (myCounter) {
-        BOOST_CHECK_EQUAL(myCounter.get()->getPackets().get(),
-                          packet_count);
-        BOOST_CHECK_EQUAL(myCounter.get()->getBytes().get(),
-                          byte_count);
-    }
+    BOOST_CHECK(myCounter);
+    BOOST_CHECK_EQUAL(myCounter.get()->getPackets().get(), packet_count);
+    BOOST_CHECK_EQUAL(myCounter.get()->getBytes().get(), byte_count);
+
+#ifdef HAVE_PROMETHEUS_SUPPORT
+    verifyRdDropPromMetrics(packet_count, byte_count);
+#endif
 }
 
-struct ofpbuf *makeFlowStatReplyMessage(MockConnection *pConn,
-                                        uint32_t priority, uint32_t cookie,
+struct ofpbuf *makeFlowStatReplyMessage(uint32_t priority, uint64_t cookie,
                                         uint32_t packet_count,
                                         uint32_t byte_count,
                                         uint32_t reg0, uint32_t reg2,
@@ -127,7 +203,7 @@ struct ofpbuf *makeFlowStatReplyMessage(MockConnection *pConn,
         bzero(fs, sizeof(struct ofputil_flow_stats));
         fs->table_id = IntFlowManager::POL_TABLE_ID;
         fs->priority = priority;
-        fs->cookie = ovs_htonll((uint64_t)cookie);
+        fs->cookie = cookie;
         fs->packet_count = packet_count;
         fs->byte_count = byte_count;
         fs->flags = OFPUTIL_FF_SEND_FLOW_REM;
@@ -147,6 +223,40 @@ struct ofpbuf *makeFlowStatReplyMessage(MockConnection *pConn,
 
 }
 
+bool ContractStatsManagerFixture::checkNewFlowMapSize (size_t pol_table_size)
+{
+    //on_timer will kick in via agent_io thread. That will update
+    //stats state to indicate all necessary flows have been initialized
+    std::lock_guard<std::mutex> lock(contractStatsManager.pstatMtx);
+    if (contractStatsManager.contractState.newFlowCounterMap.size() == pol_table_size)
+        return true;
+
+    return false;
+}
+
+// Wait for IntFlowManager to create rddrop flow and stats tables to get initialized
+void ContractStatsManagerFixture::waitForRdDropEntry (void)
+{
+    // 1 table-drop static entry in POL table with stats enabled
+    WAIT_FOR_DO_ONFAIL(checkNewFlowMapSize(1),
+                       500,,
+                       LOG(ERROR) << "##### flow state not fully setup ####";);
+
+    intFlowManager.domainUpdated(RoutingDomain::CLASS_ID, rd0->getURI());
+
+    // 1 entry is installed in policy table per VRF for collecting rddrop stats
+    WAIT_FOR_DO_ONFAIL(checkNewFlowMapSize(2),
+                       500,,
+                       LOG(ERROR) << "##### flow state not fully setup ####";);
+
+    // rdid for this rd should have been allocated
+    WAIT_FOR_DO_ONFAIL(
+            (idGen.getIdNoAlloc(IntFlowManager::getIdNamespace(RoutingDomain::CLASS_ID),
+                           rd0->getURI().toString()) != (uint32_t)-1),
+                        500,,
+                        LOG(ERROR) << "rdId not yet alloc'd for rd0");
+}
+
 BOOST_AUTO_TEST_SUITE(ContractStatsManager_test)
 
 BOOST_FIXTURE_TEST_CASE(testFlowMatchStats, ContractStatsManagerFixture) {
@@ -159,9 +269,10 @@ BOOST_FIXTURE_TEST_CASE(testFlowMatchStats, ContractStatsManagerFixture) {
     contractStatsManager.Handle(&integrationPortConn,
                                 OFPTYPE_FLOW_STATS_REPLY, NULL);
 
-    testOneFlow(integrationPortConn,classifier3,
+    testOneFlow<MockContractStatsManager>(integrationPortConn,classifier3,
                 IntFlowManager::POL_TABLE_ID,
                 1,
+                false,
                 &contractStatsManager,
                 &policyManager,
                 epg1,
@@ -176,21 +287,24 @@ BOOST_FIXTURE_TEST_CASE(testRdDropStats, ContractStatsManagerFixture) {
     contractStatsManager.registerConnection(&integrationPortConn);
     contractStatsManager.start();
     LOG(DEBUG) << "### rddrop stats start";
+    waitForRdDropEntry();
 
     // get rdId
     uint32_t rdId =
-        idGen.getId(IntFlowManager::getIdNamespace(RoutingDomain::CLASS_ID),
-                    rd0->getURI().toString());
+        idGen.getIdNoAlloc(IntFlowManager::getIdNamespace(RoutingDomain::CLASS_ID),
+                           rd0->getURI().toString());
     uint32_t priority = 1;
     uint32_t packet_count = 39;
     uint32_t byte_count = 6994;
 
     /* create  per RD flow drop stats  */
-    struct ofpbuf *res_msg = makeFlowStatReplyMessage(&integrationPortConn,
-                                                      priority, 0,
+    struct ofpbuf *res_msg = makeFlowStatReplyMessage(priority,
+                                                      flow::cookie::RD_POL_DROP_FLOW,
                                                       packet_count, byte_count,
                                                       0, 0, rdId);
     BOOST_REQUIRE(res_msg!=0);
+    ofp_header *msgHdr = (ofp_header *)res_msg->data;
+    contractStatsManager.testInjectTxnId(msgHdr->xid);
 
     contractStatsManager.Handle(&integrationPortConn,
                                 OFPTYPE_FLOW_STATS_REPLY, res_msg);
@@ -253,6 +367,7 @@ BOOST_FIXTURE_TEST_CASE(testFlowRemoved, ContractStatsManagerFixture) {
     verifyFlowStats(classifier3,
                     LAST_PACKET_COUNT,
                     LAST_PACKET_COUNT * PACKET_SIZE,
+                    false,
                     IntFlowManager::POL_TABLE_ID,
                     &contractStatsManager,
                     epg1,epg2);
@@ -267,7 +382,7 @@ BOOST_FIXTURE_TEST_CASE(testCircularBuffer, ContractStatsManagerFixture) {
     contractStatsManager.start();
     LOG(DEBUG) << "### Contract circbuffer Start";
     // Add flows in switchManager
-    testCircBuffer(intPortConn,classifier3,
+    testCircBuffer<MockContractStatsManager>(intPortConn,classifier3,
                    IntFlowManager::POL_TABLE_ID,2,&contractStatsManager,
                    epg1,epg2,&policyManager);
     LOG(DEBUG) << "### Contract circbuffer End";
@@ -284,10 +399,11 @@ BOOST_FIXTURE_TEST_CASE(testContractDelete, ContractStatsManagerFixture) {
     contractStatsManager.Handle(&integrationPortConn,
                                 OFPTYPE_FLOW_STATS_REPLY, NULL);
 
-    testOneFlow(integrationPortConn,
+    testOneFlow<MockContractStatsManager>(integrationPortConn,
                 classifier3,
                 IntFlowManager::POL_TABLE_ID,
                 1,
+                false,
                 &contractStatsManager,
                 &policyManager,
                 epg1,
@@ -320,10 +436,11 @@ BOOST_FIXTURE_TEST_CASE(testSEpgDelete, ContractStatsManagerFixture) {
     contractStatsManager.start();
     LOG(DEBUG) << "### Contract SEPG Delete Start";
 
-    testOneFlow(integrationPortConn,
+    testOneFlow<MockContractStatsManager>(integrationPortConn,
                 classifier3,
                 IntFlowManager::POL_TABLE_ID,
                 1,
+                false,
                 &contractStatsManager,
                 &policyManager,
                 epg1,
@@ -354,10 +471,11 @@ BOOST_FIXTURE_TEST_CASE(testrDSEpgDelete, ContractStatsManagerFixture) {
     contractStatsManager.start();
     LOG(DEBUG) << "### Contract DSEPG Delete Start";
 
-    testOneFlow(integrationPortConn,
+    testOneFlow<MockContractStatsManager>(integrationPortConn,
                 classifier3,
                 IntFlowManager::POL_TABLE_ID,
                 1,
+                false,
                 &contractStatsManager,
                 &policyManager,
                 epg1,

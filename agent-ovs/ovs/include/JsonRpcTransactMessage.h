@@ -18,6 +18,7 @@
 #include <rapidjson/document.h>
 #include <opflex/rpc/JsonRpcMessage.h>
 #include <opflexagent/logging.h>
+#include <unordered_map>
 
 namespace opflexagent {
 
@@ -32,12 +33,17 @@ enum class Dtype {STRING, INTEGER, BOOL};
 /**
  * OVSDB operations
  */
-enum class OvsdbOperation {SELECT, INSERT, UPDATE};
+enum class OvsdbOperation {SELECT, INSERT, UPDATE, MUTATE, DELETE};
 
 /**
  * OVSDB tables
  */
 enum class OvsdbTable {PORT, INTERFACE, BRIDGE, IPFIX, NETFLOW, MIRROR};
+
+/**
+ * OVSDB functions
+ */
+enum class OvsdbFunction {EQ};
 
 /**
  * Class to represent JSON/RPC tuple data.
@@ -150,11 +156,6 @@ public:
 };
 
 /**
- * struct representing row data for JSON/RPC requests
- */
-typedef map<string, TupleDataSet> row_map;
-
-/**
  * Transact message
  */
 class JsonRpcTransactMessage : public opflex::jsonrpc::JsonRpcMessage {
@@ -212,7 +213,7 @@ public:
     /**
      * set of tuple of data to be mapped to rows
      */
-    set<tuple<string, string, string>> conditions;
+    set<tuple<string, OvsdbFunction, string>> conditions;
 
     /**
      * set of columns in table
@@ -221,7 +222,11 @@ public:
     /**
      * map of row data
      */
-    row_map rows;
+    unordered_map<string, TupleDataSet> rowData;
+    /**
+     * mutate row data
+     */
+    unordered_map<string, std::pair<OvsdbOperation, TupleDataSet>> mutateRowData;
     /**
      * key value pairs
      */

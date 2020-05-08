@@ -13,16 +13,22 @@ addons:
       - autoconf
       - openjdk-8-jdk-headless
       - maven
-      - doxygen
       - texlive-font-utils
       - python-six
+      - lcov
 
 before_install:
   - pip install --user cpp-coveralls
 
 before_script: sudo sh -c 'echo 0 > /proc/sys/net/ipv6/conf/all/disable_ipv6';
-script: bash ./.travis/travis-build.sh
+
+env:
+  - TEST_SUITE=travis-build.sh
+  - TEST_SUITE=tsan-build.sh
+  - TEST_SUITE=asan-build.sh
+
+script: bash ./.travis/$TEST_SUITE
 
 after_success:
-  - coveralls --exclude "/usr/include*" --exclude "/usr/local/include/*" --exclude "*/test/*"
+  - bash ./.travis/coveralls-deploy.sh
 

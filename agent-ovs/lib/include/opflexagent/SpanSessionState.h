@@ -19,25 +19,6 @@
 #include <modelgbp/span/ErspanVersionEnumT.hpp>
 #include <boost/asio.hpp>
 
-namespace  std {
-
-    /**
-     * template for hash function for address::ip.
-     */
-    template<>
-    struct hash<boost::asio::ip::address> {
-        /**
-         * hash ip::address
-         * @param i ip::address
-         * @return hash
-         */
-        size_t operator()(const boost::asio::ip::address &i) const {
-            return hash<string>()(i.to_string());
-        }
-    };
-
-
-}
 
 namespace opflexagent {
 
@@ -46,34 +27,9 @@ using namespace boost::asio::ip;
 using namespace opflex::modb;
 
 /**
- * class to represent a destination end point
- */
-class DstEndPoint {
-    public:
-        /**
-         * constructor that accepts destination IP address.
-         * @param ip ip address of destination end point
-         */
-        DstEndPoint(const address& ip) : dstIp(ip) {};
-        /**
-         * copy constructor
-         * @param dp reference to object being copied from
-         */
-        DstEndPoint(const DstEndPoint& dp) : dstIp(dp.dstIp) {};
-        /**
-         * get the address of this destination end point
-         * @return address address of this destination end point.
-         */
-        const address& getAddress() const { return dstIp; };
-
-    private:
-        address dstIp;
-};
-
-/**
  * class to represent a source end point
  */
-class SourceEndPoint {
+class SourceEndpoint {
     public:
         /**
          * constructor takes a name and port
@@ -81,8 +37,14 @@ class SourceEndPoint {
          * @param[in] port_ source port name on the vswitch
          * @param[in] dir_ direction to be set
          */
-        SourceEndPoint(const string& name_, const string& port_, const unsigned char dir_) :
+        SourceEndpoint(const string& name_, const string& port_, const unsigned char dir_) :
             name(name_), port(port_), dir(dir_) {};
+
+        /**
+         * Copy constructor
+         */
+        SourceEndpoint(const SourceEndpoint& copy) : name(copy.name), port(copy.port), dir(copy.dir) {}
+
         /**
          * gets the name of the source end point
          * @return name of source end point
@@ -121,9 +83,9 @@ class SessionState {
              * @param src2 shared pointer to source end point 2
              * @return bool true if comparison passes.
              */
-            bool operator()(const std::shared_ptr<SourceEndPoint>& src1,
-                            const std::shared_ptr<SourceEndPoint>& src2) const {
-                return src1->getPort() == src2->getPort();
+            bool operator()(const SourceEndpoint& src1,
+                            const SourceEndpoint& src2) const {
+                return src1.getPort() == src2.getPort();
             }
         };
         /**
@@ -136,20 +98,21 @@ class SessionState {
              * @param src shared pointer to source end point
              * @return size_t
              */
-            size_t operator()(shared_ptr<SourceEndPoint> src) const {
-                string strHash(src->getPort());
-                strHash += src->getDirection();
+            size_t operator()(const SourceEndpoint& src) const {
+                string strHash(src.getPort());
+                strHash += src.getDirection();
                 return std::hash<string>()(strHash);
             }
         };
+
         /**
          * typedef for source end point set
          */
-        typedef unordered_set<shared_ptr<SourceEndPoint>, SrcHash, SrcCompare>
-            srcEpSet;
+        typedef unordered_set<SourceEndpoint, SrcHash, SrcCompare> srcEpSet;
+
         /**
          * constructor that takes a URI that points to a Session object
-         * @param uri_ URI to a Session object
+         * @param uri_ URI of a Session object
          * @param name_ name of Session object
          */
         SessionState(const URI& uri_, const string& name_) :
@@ -164,42 +127,37 @@ class SessionState {
         const URI& getUri() const { return uri;};
 
         /**
-         * add a destination end point to the internal map
-         * @param uri uri pointing to the DstSummary object
-         * @param dEp shared pointer to a DstEndPoint object.
-         */
-        void addDstEndPoint(const URI& uri, const shared_ptr<DstEndPoint>& dEp);
-
-        /**
          * add a source end point to the internal map
-         * @param srcEp shared pointer to a SourceEndPoint object.
+         * @param srcEp shared pointer to a SourceEndpoint object.
          */
-        void addSrcEndPoint(const shared_ptr<SourceEndPoint>& srcEp);
+        void addSrcEndpoint(const SourceEndpoint& srcEp);
 
         /**
-         * get the source end point set reference
-         * @return a reference to the source end point set
+         * are there any src endpoints
+         * @return has src endpoints
          */
-        const srcEpSet& getSrcEndPointSet();
+        bool hasSrcEndpoints();
 
         /**
          * get a copy of the source end points
          * @param ep reference to end point set
          */
-        const void getSrcEndPointSet(srcEpSet& ep);
+        void getSrcEndpointSet(srcEpSet& ep);
 
         /**
-         * gets the destination end point map reference
-         * @return a reference to the destination end point map.
+         * get the destination of the ERSPAN session
+         * @return dst IP
          */
-        const unordered_map<URI, shared_ptr<DstEndPoint>>&
-             getDstEndPointMap();
+        const address& getDestination() { return destination; }
 
         /**
-         * get a copy of destination end point map
-         * @param dMap a reference to a map of URI,DstEndPoint
+         * set the destination of the ERSPAN session
+         * @param destination_ dst IP
          */
-        const void getDstEndPointMap(unordered_map<URI, shared_ptr<DstEndPoint>>& dMap);
+        void setDestination(const address& destination_) {
+            destination = destination_;
+        }
+
         /**
          * gets the name string for this object
          * @return the name attribute string.
@@ -227,13 +185,6 @@ class SessionState {
         * @param ver ERSPAN version
         */
        void setVersion(uint8_t ver) { version = ver;};
-       /**
-        * overloading output stream operator
-        * @param out output stream reference
-        * @param seSt SessionState reference
-        * @return output stream.
-        */
-       friend ostream& operator<< (ostream& out, const SessionState& seSt);
 
     private:
         URI uri;
@@ -241,9 +192,78 @@ class SessionState {
         uint8_t adminState;
         uint8_t version;
 
-        srcEpSet srcEndPoints;
-        // mapping DstSummary to DstEndPoint
-        unordered_map<URI, shared_ptr<DstEndPoint>> dstEndPoints;
+        srcEpSet srcEndpoints;
+        // mapping DstSummary to dst IP
+        address destination;
+};
+
+class ErspanParams {
+public:
+    /**
+     * Default constructor
+     */
+    ErspanParams() : ver(0) {}
+
+    /**
+     * Copy constructor
+     */
+    ErspanParams(const ErspanParams& copy) : ver(copy.ver), remoteIp(copy.remoteIp), portName(copy.portName) {}
+
+    /**
+     * Get the ERSPAN version
+     *
+     * @return 1 for Type II, 2 for Type III
+     */
+    unsigned int getVersion() const {
+        return ver;
+    }
+
+    /**
+     * Set the ERSPAN version
+     *
+     * @param version ERSPAN version
+     */
+    void setVersion(int version) {
+        ver = version;
+    }
+
+    /**
+     * Get the ERSPAN session dest IP
+     * @return dest IP
+     */
+    const string& getRemoteIp() const {
+        return remoteIp;
+    }
+
+    /**
+     * Set the ERSPAN session dest IP
+     * @param remoteIp_ ERSPAN session dest IP
+     */
+    void setRemoteIp(const string& remoteIp_) {
+        remoteIp = remoteIp_;
+    }
+
+    /**
+     * Get the ERSPAN port name
+     * @return ERSPAN port name
+     */
+    const string& getPortName() const {
+        return portName;
+    }
+
+    /**
+     * Set the ERSPAN port name
+     * @param portName_ ERSPAN port name
+     */
+    void setPortName(const string& portName_) {
+        portName = portName_;
+    }
+
+private:
+
+    unsigned int ver;
+    string remoteIp;
+    string portName;
 };
 }
 

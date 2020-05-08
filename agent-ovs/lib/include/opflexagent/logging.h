@@ -23,7 +23,7 @@ namespace opflexagent {
 /**
  * Supported log levels
  */
-enum LogLevel { FATAL, ERROR, WARNING, INFO, DEBUG };
+enum LogLevel { FATAL, ERROR, WARNING, INFO, DEBUG, TRACE };
 
 extern LogLevel logLevel;
 
@@ -59,14 +59,6 @@ public:
 void initLogging(const std::string& level, bool toSyslog,
                  const std::string& log_file,
                  const std::string& syslog_name = "opflex-agent");
-
-/**
- * Change the logging level of the agent.
- *
- * @param level the log level to log at. If this is not a valid string,
- * logging level is set to the default level.
- */
-void setLoggingLevel(const std::string& level);
 
 /**
  * Change the logging level of the agent.

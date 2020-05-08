@@ -55,7 +55,7 @@ OVSRenderer::OVSRenderer(Agent& agent_)
                        intPortMapper),
       tunnelEpManager(&agent_),
       intFlowManager(agent_, intSwitchManager, idGen,
-                     ctZoneManager, pktInHandler, tunnelEpManager),
+                     ctZoneManager, tunnelEpManager),
       accessSwitchManager(agent_, accessFlowExecutor,
                           accessFlowReader, accessPortMapper),
       accessFlowManager(agent_, accessSwitchManager, idGen, ctZoneManager),
@@ -75,7 +75,7 @@ OVSRenderer::OVSRenderer(Agent& agent_)
       tunnelEndpointAdvMode(AdvertManager::EPADV_RARP_BROADCAST),
       tunnelEndpointAdvIntvl(300),
       virtualDHCP(true), connTrack(true), ctZoneRangeStart(0),
-      ctZoneRangeEnd(0), ifaceStatsEnabled(true), ifaceStatsInterval(0),
+      ctZoneRangeEnd(0), ovsdbUseLocalTcpPort(false), ifaceStatsEnabled(true), ifaceStatsInterval(0),
       contractStatsEnabled(true), contractStatsInterval(0),
       serviceStatsFlowDisabled(false), serviceStatsEnabled(true), serviceStatsInterval(0),
       secGroupStatsEnabled(true), secGroupStatsInterval(0),
@@ -219,6 +219,12 @@ void OVSRenderer::start() {
                                : NULL);
         tableDropStatsManager.start();
     }
+    //Create any threads after starting the packet logger.
+    //This is necessary so that fork works correctly. Fork
+    //requires that no threads be active because files in the parent
+    //process are duplicated as part of fork to the child process and
+    //threads can hold resources while parent is forking
+    startPacketLogger();
 
     intSwitchManager.connect();
     if (accessBridgeName != "") {
@@ -230,6 +236,7 @@ void OVSRenderer::start() {
     cleanupTimer->async_wait(bind(&OVSRenderer::onCleanupTimer,
                                   this, error));
 
+<<<<<<< HEAD
     if(!dropLogIntIface.empty() || !dropLogAccessIface.empty()) {
         // Inform the io_service that we are about to become a daemon. The
         // io_service cleans up any internal resources, such as threads, that may
@@ -320,6 +327,9 @@ void OVSRenderer::start() {
     }
 
     ovsdbConnection.reset(new OvsdbConnection());
+=======
+    ovsdbConnection.reset(new OvsdbConnection(ovsdbUseLocalTcpPort));
+>>>>>>> origin/master
     ovsdbConnection->start();
 
     if (getAgent().isFeatureEnabled(FeatureList::ERSPAN))
@@ -461,6 +471,7 @@ void OVSRenderer::setProperties(const ptree& properties) {
                                                        ".table-drop.interval");
     static const std::string DROP_LOG_ENCAP_GENEVE("drop-log.geneve");
     static const std::string REMOTE_NAMESPACE("namespace");
+    static const std::string OVSDB_USE_LOCAL_TCPPORT("ovsdb-use-local-tcp-port");
 
     intBridgeName =
         properties.get<std::string>(OVS_BRIDGE_NAME, "br-int");
@@ -541,13 +552,15 @@ void OVSRenderer::setProperties(const ptree& properties) {
 
     std::string tnlEpAdvStr =
         properties.get<std::string>(ENDPOINT_TNL_ADV_MODE,
-                                    "rarp-broadcast");
+                                    "garp-rarp-broadcast");
     if (tnlEpAdvStr == "gratuitous-broadcast") {
         tunnelEndpointAdvMode = AdvertManager::EPADV_GRATUITOUS_BROADCAST;
     } else if(tnlEpAdvStr == "disabled") {
         tunnelEndpointAdvMode = AdvertManager::EPADV_DISABLED;
-    } else {
+    } else if(tnlEpAdvStr == "rarp-broadcast") {
         tunnelEndpointAdvMode = AdvertManager::EPADV_RARP_BROADCAST;
+    } else {
+        tunnelEndpointAdvMode = AdvertManager::EPADV_GARP_RARP_BROADCAST;
     }
 
     tunnelEndpointAdvIntvl =
@@ -563,6 +576,8 @@ void OVSRenderer::setProperties(const ptree& properties) {
 
     mcastGroupFile = properties.get<std::string>(MCAST_GROUP_FILE,
                                                  DEF_MCAST_GROUPFILE);
+
+    ovsdbUseLocalTcpPort = properties.get<bool>(OVSDB_USE_LOCAL_TCPPORT, false);
 
     ifaceStatsEnabled = properties.get<bool>(STATS_INTERFACE_ENABLED, true);
     contractStatsEnabled = properties.get<bool>(STATS_CONTRACT_ENABLED, true);
@@ -627,6 +642,98 @@ void OVSRenderer::onCleanupTimer(const boost::system::error_code& ec) {
         cleanupTimer->async_wait(bind(&OVSRenderer::onCleanupTimer,
                                       this, error));
     }
+}
+
+void OVSRenderer::startPacketLogger() {
+    if(dropLogIntIface.empty() && dropLogAccessIface.empty()) {
+        LOG(DEBUG) << "DropLog interfaces not configured";
+        return;
+    }
+    boost::asio::io_service &agent_io = getAgent().getAgentIOService();
+    // Inform the io_service that we are about to become a daemon. The
+    // io_service cleans up any internal resources, such as threads, that may
+    // interfere with forking.
+    agent_io.notify_fork(boost::asio::io_service::fork_prepare);
+    if(pid_t pid = fork()) {
+        if (pid > 0) {
+            agent_io.notify_fork(boost::asio::io_service::fork_parent);
+        } else {
+            LOG(ERROR) << "PacketLogger: Failed to fork:" << errno;
+        }
+        return;
+    }
+    // Inform the io_service that we have finished becoming a daemon. The
+    // io_service uses this opportunity to create any internal file descriptors
+    // that need to be private to the new process.
+    agent_io.notify_fork(boost::asio::io_service::fork_child);
+    int chdir_ret = chdir("/");
+    if(chdir_ret) {
+        LOG(ERROR) << "PacketLogger: Failed to chdir to /";
+    }
+    // Close the standard streams. This decouples the daemon from the terminal
+    // that started it.
+    int fd;
+    fd = open("/dev/null",O_RDWR, 0);
+    if (fd != -1) {
+        dup2 (fd, STDIN_FILENO);
+        if (fd > 0)
+            close (fd);
+    }
+    auto logParams = getAgent().getLogParams();
+    std::string log_level,log_file;
+    bool toSysLog;
+    std::tie(log_level, toSysLog, log_file) = logParams;
+    initLogging(log_level, toSysLog, log_file);
+    boost::system::error_code ec;
+    boost::asio::ip::address addr = boost::asio::ip::address::from_string(LOOPBACK, ec);
+    if(ec) {
+        LOG(ERROR) << "PacketLogger: Failed to convert address " << LOOPBACK;
+    }
+    pktLogger.setAddress(addr, dropLogLocalPort);
+    pktLogger.setNotifSock(getAgent().getPacketEventNotifSock());
+    PacketLogHandler::TableDescriptionMap tblDescMap;
+    intSwitchManager.getForwardingTableList(tblDescMap);
+    pktLogger.setIntBridgeTableDescription(tblDescMap);
+    accessSwitchManager.getForwardingTableList(tblDescMap);
+    pktLogger.setAccBridgeTableDescription(tblDescMap);
+    if(!pktLogger.startListener()) {
+        exit(1);
+    }
+
+    pid_t child_pid = getpid();
+    std::string fileName(std::string(PACKET_LOGGER_PIDDIR) + "/logger.pid");
+    fstream s(fileName, s.out);
+    if(!s.is_open()) {
+        LOG(ERROR) << "Failed to open " << fileName;
+    } else {
+        s << child_pid;
+    }
+    s.close();
+    // Register signal handlers.
+    sigset_t waitset;
+    sigemptyset(&waitset);
+    sigaddset(&waitset, SIGINT);
+    sigaddset(&waitset, SIGTERM);
+    sigaddset(&waitset, SIGUSR1);
+    sigprocmask(SIG_BLOCK, &waitset, NULL);
+    std::thread signal_thread([this, &waitset]() {
+        int sig;
+        int result = sigwait(&waitset, &sig);
+        if (result == 0) {
+            LOG(INFO) << "Got " << strsignal(sig) << " signal";
+        } else {
+            LOG(ERROR) << "Failed to wait for signals: " << errno;
+        }
+        this->getPacketLogger().stopListener();
+        this->getPacketLogger().stopExporter();
+    });
+    std::thread client_thread([this]() {
+       this->getPacketLogger().startExporter();
+    });
+    this->pktLoggerIO.run();
+    client_thread.join();
+    signal_thread.join();
+    exit(0);
 }
 
 } /* namespace opflexagent */

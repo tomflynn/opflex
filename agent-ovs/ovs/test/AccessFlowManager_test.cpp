@@ -187,29 +187,49 @@ BOOST_FIXTURE_TEST_CASE(learningBridge, AccessFlowManagerFixture) {
 BOOST_FIXTURE_TEST_CASE(secGrp, AccessFlowManagerFixture) {
     createObjects();
     createPolicyObjects();
+    shared_ptr<modelgbp::gbp::Subnets> rs;
     {
         Mutator mutator(framework, "policyreg");
+        rs = space->addGbpSubnets("subnets_rule0");
+
+        rs->addGbpSubnet("subnets_rule0_1")
+            ->setAddress("0.0.0.0")
+            .setPrefixLen(0);
+        rs->addGbpSubnet("subnets_rule0_2")
+            ->setAddress("0::")
+            .setPrefixLen(0);
+
+        shared_ptr<modelgbp::gbp::SecGroupRule> r1, r2, r3, r4, r5;
         secGrp1 = space->addGbpSecGroup("secgrp1");
-        secGrp1->addGbpSecGroupSubject("1_subject1")
-            ->addGbpSecGroupRule("1_1_rule1")
-            ->setDirection(DirectionEnumT::CONST_IN).setOrder(100)
+
+        r1 = secGrp1->addGbpSecGroupSubject("1_subject1")
+                ->addGbpSecGroupRule("1_1_rule1");
+        r1->setDirection(DirectionEnumT::CONST_IN).setOrder(100)
             .addGbpRuleToClassifierRSrc(classifier1->getURI().toString());
-        secGrp1->addGbpSecGroupSubject("1_subject1")
-            ->addGbpSecGroupRule("1_1_rule2")
-            ->setDirection(DirectionEnumT::CONST_IN).setOrder(150)
+        r1->addGbpSecGroupRuleToRemoteAddressRSrc(rs->getURI().toString());
+
+        r2 = secGrp1->addGbpSecGroupSubject("1_subject1")
+                ->addGbpSecGroupRule("1_1_rule2");
+        r2->setDirection(DirectionEnumT::CONST_IN).setOrder(150)
             .addGbpRuleToClassifierRSrc(classifier8->getURI().toString());
-        secGrp1->addGbpSecGroupSubject("1_subject1")
-            ->addGbpSecGroupRule("1_1_rule3")
-            ->setDirection(DirectionEnumT::CONST_OUT).setOrder(200)
+        r2->addGbpSecGroupRuleToRemoteAddressRSrc(rs->getURI().toString());
+
+        r3 = secGrp1->addGbpSecGroupSubject("1_subject1")
+            ->addGbpSecGroupRule("1_1_rule3");
+        r3->setDirection(DirectionEnumT::CONST_OUT).setOrder(200)
             .addGbpRuleToClassifierRSrc(classifier2->getURI().toString());
-        secGrp1->addGbpSecGroupSubject("1_subject1")
-            ->addGbpSecGroupRule("1_1_rule4")
-            ->setDirection(DirectionEnumT::CONST_IN).setOrder(300)
+
+        r4 = secGrp1->addGbpSecGroupSubject("1_subject1")
+                ->addGbpSecGroupRule("1_1_rule4");
+        r4->setDirection(DirectionEnumT::CONST_IN).setOrder(300)
             .addGbpRuleToClassifierRSrc(classifier6->getURI().toString());
-        secGrp1->addGbpSecGroupSubject("1_subject1")
-            ->addGbpSecGroupRule("1_1_rule5")
-            ->setDirection(DirectionEnumT::CONST_IN).setOrder(400)
+        r4->addGbpSecGroupRuleToRemoteAddressRSrc(rs->getURI().toString());
+
+        r5 = secGrp1->addGbpSecGroupSubject("1_subject1")
+                 ->addGbpSecGroupRule("1_1_rule5");
+        r5->setDirection(DirectionEnumT::CONST_IN).setOrder(400)
             .addGbpRuleToClassifierRSrc(classifier7->getURI().toString());
+        r5->addGbpSecGroupRuleToRemoteAddressRSrc(rs->getURI().toString());
         mutator.commit();
     }
 
@@ -238,19 +258,25 @@ BOOST_FIXTURE_TEST_CASE(secGrp, AccessFlowManagerFixture) {
     WAIT_FOR_TABLES("two-secgrp-nocon", 500);
 
     {
+        shared_ptr<modelgbp::gbp::SecGroupRule> r1, r2, r3;
+
         Mutator mutator(framework, "policyreg");
         secGrp2 = space->addGbpSecGroup("secgrp2");
-        secGrp2->addGbpSecGroupSubject("2_subject1")
-            ->addGbpSecGroupRule("2_1_rule1")
-            ->addGbpRuleToClassifierRSrc(classifier0->getURI().toString());
-        secGrp2->addGbpSecGroupSubject("2_subject1")
-            ->addGbpSecGroupRule("2_1_rule2")
-            ->setDirection(DirectionEnumT::CONST_BIDIRECTIONAL).setOrder(20)
+        r1 = secGrp2->addGbpSecGroupSubject("2_subject1")
+                ->addGbpSecGroupRule("2_1_rule1");
+        r1->addGbpRuleToClassifierRSrc(classifier0->getURI().toString());
+        r1->addGbpSecGroupRuleToRemoteAddressRSrc(rs->getURI().toString());
+
+        r2 = secGrp2->addGbpSecGroupSubject("2_subject1")
+                ->addGbpSecGroupRule("2_1_rule2");
+        r2->setDirection(DirectionEnumT::CONST_BIDIRECTIONAL).setOrder(20)
             .addGbpRuleToClassifierRSrc(classifier5->getURI().toString());
-        secGrp2->addGbpSecGroupSubject("2_subject1")
-            ->addGbpSecGroupRule("2_1_rule3")
-            ->setDirection(DirectionEnumT::CONST_OUT).setOrder(30)
+
+        r3 = secGrp2->addGbpSecGroupSubject("2_subject1")
+            ->addGbpSecGroupRule("2_1_rule3");
+        r3->setDirection(DirectionEnumT::CONST_OUT).setOrder(30)
             .addGbpRuleToClassifierRSrc(classifier9->getURI().toString());
+        r3->addGbpSecGroupRuleToRemoteAddressRSrc(rs->getURI().toString());
         mutator.commit();
     }
 
@@ -259,7 +285,6 @@ BOOST_FIXTURE_TEST_CASE(secGrp, AccessFlowManagerFixture) {
     initExpSecGrpSet12(true);
     WAIT_FOR_TABLES("two-secgrp", 500);
 
-    shared_ptr<modelgbp::gbp::Subnets> rs;
     {
         Mutator mutator(framework, "policyreg");
         rs = space->addGbpSubnets("subnets_rule1");
@@ -316,11 +341,14 @@ void AccessFlowManagerFixture::initExpStatic() {
     ADDF(Bldr().table(OUT).priority(1).isMdAct(0)
          .actions().out(OUTPORT).done());
     ADDF(Bldr().table(OUT).priority(1)
-         .isMdAct(flow::meta::access_out::PUSH_VLAN)
+         .isMdAct(opflexagent::flow::meta::access_out::PUSH_VLAN)
+         .actions().pushVlan().move(FD12, VLAN).out(OUTPORT).done());
+    ADDF(Bldr().table(OUT).priority(1)
+         .isMdAct(opflexagent::flow::meta::access_out::UNTAGGED_AND_PUSH_VLAN)
          .actions().out(OUTPORT).pushVlan()
          .move(FD12, VLAN).out(OUTPORT).done());
     ADDF(Bldr().table(OUT).priority(1)
-         .isMdAct(flow::meta::access_out::POP_VLAN)
+         .isMdAct(opflexagent::flow::meta::access_out::POP_VLAN)
          .isVlanTci("0x1000/0x1000")
          .actions().popVlan().out(OUTPORT).done());
 
@@ -332,7 +360,7 @@ void AccessFlowManagerFixture::initExpStatic() {
             .actions().go(GRP).done());
     for(int i=GRP; i<=OUT; i++) {
         ADDF(Bldr().table(i).priority(0)
-        .cookie(ovs_ntohll(flow::cookie::TABLE_DROP_FLOW))
+        .cookie(ovs_ntohll(opflexagent::flow::cookie::TABLE_DROP_FLOW))
         .flags(OFPUTIL_FF_SEND_FLOW_REM).priority(0)
         .actions().dropLog(i).go(EXP_DROP).done());
     }
@@ -352,9 +380,9 @@ void AccessFlowManagerFixture::initExpDhcpEp(shared_ptr<Endpoint>& ep) {
              .isTpSrc(68).isTpDst(67)
              .actions()
              .load(OUTPORT, uplink)
-             .mdAct(flow::meta::access_out::POP_VLAN)
+             .mdAct(opflexagent::flow::meta::access_out::POP_VLAN)
              .go(OUT).done());
-        if (ep->getAccessIfaceVlan()) {
+        if (ep->isAccessAllowUntagged() && ep->getAccessIfaceVlan()) {
             ADDF(Bldr()
                  .table(GRP).priority(200).udp().in(access)
                  .isVlanTci("0x0000/0x1fff")
@@ -371,9 +399,9 @@ void AccessFlowManagerFixture::initExpDhcpEp(shared_ptr<Endpoint>& ep) {
              .isTpSrc(546).isTpDst(547)
              .actions()
              .load(OUTPORT, uplink)
-             .mdAct(flow::meta::access_out::POP_VLAN)
+             .mdAct(opflexagent::flow::meta::access_out::POP_VLAN)
              .go(OUT).done());
-        if (ep->getAccessIfaceVlan()) {
+        if (ep->isAccessAllowUntagged() && ep->getAccessIfaceVlan()) {
             ADDF(Bldr()
                  .table(GRP).priority(200).udp6().in(access)
                  .isVlanTci("0x0000/0x1fff")
@@ -398,18 +426,20 @@ void AccessFlowManagerFixture::initExpEp(shared_ptr<Endpoint>& ep) {
              .actions()
              .load(RD, zoneId).load(SEPG, 1)
              .load(OUTPORT, uplink)
-             .mdAct(flow::meta::access_out::POP_VLAN)
+             .mdAct(opflexagent::flow::meta::access_out::POP_VLAN)
              .go(OUT_POL).done());
-        ADDF(Bldr().table(GRP).priority(99).in(access)
-             .isVlanTci("0x0000/0x1fff")
-             .actions()
-             .load(RD, zoneId).load(SEPG, 1)
-             .load(OUTPORT, uplink)
-             .go(OUT_POL).done());
+        if (ep->isAccessAllowUntagged()) {
+            ADDF(Bldr().table(GRP).priority(99).in(access)
+                 .isVlanTci("0x0000/0x1fff")
+                 .actions()
+                 .load(RD, zoneId).load(SEPG, 1)
+                 .load(OUTPORT, uplink)
+                 .go(OUT_POL).done());
+        }
         ADDF(Bldr().table(GRP).priority(100).in(uplink)
              .actions().load(RD, zoneId).load(SEPG, 1).load(OUTPORT, access)
              .load(FD, ep->getAccessIfaceVlan().get())
-             .mdAct(flow::meta::access_out::PUSH_VLAN)
+             .mdAct(opflexagent::flow::meta::access_out::PUSH_VLAN)
              .go(IN_POL).done());
     } else {
         ADDF(Bldr().table(GRP).priority(100).in(access)
@@ -465,10 +495,9 @@ uint16_t AccessFlowManagerFixture::initExpSecGrp1(uint32_t setId,
             ADDF(Bldr(SEND_FLOW_REM).table(IN_POL).priority(prio).cookie(ruleId)
                  .tcp().reg(SEPG, setId).isIpSrc("10.0.0.0/8").isTpDst(80)
                  .actions().go(OUT).done());
-    } else {
-        ADDF(Bldr(SEND_FLOW_REM).table(IN_POL).priority(prio).cookie(ruleId)
-             .tcp().reg(SEPG, setId).isTpDst(80).actions().go(OUT).done());
     }
+    ADDF(Bldr(SEND_FLOW_REM).table(IN_POL).priority(prio).cookie(ruleId)
+         .tcp().reg(SEPG, setId).isTpDst(80).actions().go(OUT).done());
     /* classifer 8  */
     ruleId = idGen.getId("l24classifierRule",
                          classifier8->getURI().toString());
@@ -481,10 +510,9 @@ uint16_t AccessFlowManagerFixture::initExpSecGrp1(uint32_t setId,
                  .tcp6().reg(SEPG, setId)
                  .isIpv6Src("fd34:9c39:1374:358c::/64")
                  .isTpDst(80).actions().go(OUT).done());
-    } else {
-        ADDF(Bldr(SEND_FLOW_REM).table(IN_POL).priority(prio-128).cookie(ruleId)
-             .tcp6().reg(SEPG, setId).isTpDst(80).actions().go(OUT).done());
     }
+    ADDF(Bldr(SEND_FLOW_REM).table(IN_POL).priority(prio-128).cookie(ruleId)
+        .tcp6().reg(SEPG, setId).isTpDst(80).actions().go(OUT).done());
     /* classifier 2  */
     ruleId = idGen.getId("l24classifierRule",
                          classifier2->getURI().toString());

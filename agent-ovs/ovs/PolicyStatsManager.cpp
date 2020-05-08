@@ -97,6 +97,7 @@ void PolicyStatsManager::stop(bool unregister_listener) {
     {
         std::lock_guard<std::mutex> lock(timer_mutex);
         if (timer) {
+            LOG(DEBUG) << "timer cancelled";
             timer->cancel();
         }
     }
@@ -539,6 +540,10 @@ bool PolicyStatsManager::handleFlowStats(ofpbuf *msg, const table_map_t& tableMa
 
 void PolicyStatsManager::sendRequest(uint32_t table_id, uint64_t _cookie,
         uint64_t _cookie_mask) {
+
+    if (!connection)
+        return;
+
     // send port stats request again
     ofp_version ofVer = (ofp_version)connection->GetProtocolVersion();
     ofputil_protocol proto = ofputil_protocol_from_ofp_version(ofVer);
