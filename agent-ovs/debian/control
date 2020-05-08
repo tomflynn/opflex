@@ -30,6 +30,7 @@ Package: opflex-agent
 Architecture: any
 Depends:
  libopflex-agent (= ${binary:Version}),
+ prometheus-cpp (>= 0.9.0)
  ${shlibs:Depends}
 Description: OpFlex agent for group-based policy
  The Opflex agent runs alongside the management plane of a network
