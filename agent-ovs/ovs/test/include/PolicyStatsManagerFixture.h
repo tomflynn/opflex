@@ -62,57 +62,26 @@ public:
         ofp_header *hdr = (ofp_header *)msg->data;
         ofptype typ;
         ofptype_decode(&typ, hdr);
-        // Boost test methods arent thread safe. Main thread runs UTs and agentio
-        // can call mock class code. Both can run BOOST check calls which leads to
-        // data race. Calling boost check only if the type is a mismatch, which will
-        // then indicate a real error which can get logged with BOOST_CHECK.
-        if (typ != OFPTYPE_FLOW_STATS_REQUEST)
-            BOOST_CHECK(typ == OFPTYPE_FLOW_STATS_REQUEST);
+        BOOST_CHECK(typ == OFPTYPE_FLOW_STATS_REQUEST);
         msg.reset();
         return 0;
     }
-    int GetProtocolVersion() { return OFP13_VERSION; }
 };
 
 class PolicyStatsManagerFixture : public FlowManagerFixture {
 public:
     PolicyStatsManagerFixture (
-<<<<<<< HEAD
             opflex_elem_t mode = opflex_elem_t::INVALID_MODE,
             bool intBridgeTableDesc = true ): FlowManagerFixture (
                     mode, intBridgeTableDesc) {
     };
 
-=======
-            opflex_elem_t mode = opflex_elem_t::INVALID_MODE):
-            FlowManagerFixture (mode) {
-    };
-
-#ifdef HAVE_PROMETHEUS_SUPPORT
-    const string cmd = "curl --proxy \"\" --compressed --silent http://127.0.0.1:9612/metrics 2>&1;";
-    virtual void verifyPromMetrics (shared_ptr<L24Classifier> classifier,
-                            uint32_t pkts,
-                            uint32_t bytes,
-                            bool isTx=false) {
-    }
-#endif
-
-    // New counter objects get created for every diff in flow. Prometheus
-    // maintains an aggregatiion of all these updates. On the second update
-    // with same values in tests, check for total value in prometheus.
->>>>>>> origin/master
     void verifyFlowStats(shared_ptr<L24Classifier> classifier,
-                         uint32_t packet_count, // delta
-                         uint32_t byte_count, // delta
-                         bool isExistingMetric,
-                         uint32_t table_id,
+                         uint32_t packet_count,
+                         uint32_t byte_count,uint32_t table_id,
                          PolicyStatsManager *statsManager,
                          shared_ptr<EpGroup> srcEpg = NULL,
                          shared_ptr<EpGroup> dstEpg = NULL) {
-
-        uint32_t t_byte_count = isExistingMetric?byte_count*2:byte_count;
-        uint32_t t_packet_count = isExistingMetric?packet_count*2:packet_count;
-
         optional<shared_ptr<PolicyStatUniverse> > su =
             PolicyStatUniverse::resolve(agent.getFramework());
         if (srcEpg.get() && dstEpg.get()) {
@@ -120,11 +89,7 @@ public:
                 boost::lexical_cast<std::string>(statsManager->getAgentUUID());
             LOG(DEBUG) << "verifying stats for src_epg: " << srcEpg->getURI().toString()
                         << " dst_epg: " << dstEpg->getURI().toString()
-                        << " classifier: " << classifier->getURI().toString()
-                        << " delta pkt count: " << packet_count
-                        << " delta byte count: " << byte_count
-                        << " total pkt count: " << t_packet_count
-                        << " total byte count: " << t_byte_count;
+                        << " classifier: " << classifier->getURI().toString();
             optional<shared_ptr<L24ClassifierCounter> > myCounter =
                 boost::make_optional<shared_ptr<L24ClassifierCounter> >(false, nullptr);
             WAIT_FOR_DO_ONFAIL(
@@ -143,20 +108,13 @@ public:
                } else {
                    LOG(DEBUG) << "L24classifiercounter mo isnt present";
                });
-#ifdef HAVE_PROMETHEUS_SUPPORT
-            verifyPromMetrics(classifier, t_packet_count, t_byte_count);
-#endif
         } else {
             auto uuid =
                 boost::lexical_cast<std::string>(statsManager->getAgentUUID());
             optional<shared_ptr<SecGrpClassifierCounter> > myCounter =
                 boost::make_optional<shared_ptr<SecGrpClassifierCounter> >(false, nullptr);
             LOG(DEBUG) << "verifying stats for"
-                        << " classifier: " << classifier->getURI().toString()
-                        << " delta pkt count: " << packet_count
-                        << " delta byte count: " << byte_count
-                        << " total pkt count: " << t_packet_count
-                        << " total byte count: " << t_byte_count;
+                        << " classifier: " << classifier->getURI().toString();
             WAIT_FOR_DO_ONFAIL(
                 (myCounter && myCounter.get()
                     && (
@@ -193,10 +151,6 @@ public:
                 } else {
                     LOG(DEBUG) << "SGclassifiercounter mo isnt present";
                 });
-#ifdef HAVE_PROMETHEUS_SUPPORT
-            verifyPromMetrics(classifier, t_packet_count, t_byte_count,
-                              table_id == AccessFlowManager::SEC_GROUP_OUT_TABLE_ID);
-#endif
         }
     }
 
@@ -318,7 +272,6 @@ public:
                                 entryListCopy);
     }
 
-    template <typename cStatsManager>
     void testCircBuffer(MockConnection& portConn,
                         shared_ptr<L24Classifier>& classifier,
                         uint32_t table_id,
@@ -343,8 +296,7 @@ public:
         LOG(DEBUG) << "1 makeFlowStatReplyMessage created";
         BOOST_REQUIRE(res_msg!=0);
         ofp_header *msgHdr = (ofp_header *)res_msg->data;
-        cStatsManager* pSM = dynamic_cast<cStatsManager*>(statsManager);
-        pSM->testInjectTxnId(msgHdr->xid);
+        statsManager->testInjectTxnId(msgHdr->xid);
 
         // send first flow stats reply message
         statsManager->Handle(&portConn,
@@ -362,7 +314,7 @@ public:
                                                  table_id,
                                                  entryList);
             msgHdr = (ofp_header *)res_msg->data;
-            pSM->testInjectTxnId(msgHdr->xid);
+            statsManager->testInjectTxnId(msgHdr->xid);
             // send second flow stats reply message
             statsManager->Handle(&portConn,
                                  OFPTYPE_FLOW_STATS_REPLY, res_msg);
@@ -399,12 +351,9 @@ public:
         }
     }
 
-    template <typename cStatsManager>
     void testOneFlow(MockConnection& portConn,
                      shared_ptr<L24Classifier>& classifier,uint32_t table_id,
-                     uint32_t portNum,
-                     bool isExistingMetric,
-                     PolicyStatsManager *statsManager,
+                     uint32_t portNum,PolicyStatsManager *statsManager,
                      PolicyManager *policyManager = NULL,
                      shared_ptr<EpGroup> srcEpg = NULL,
                      shared_ptr<EpGroup> dstEpg = NULL) {
@@ -429,8 +378,7 @@ public:
         LOG(DEBUG) << "1 makeFlowStatReplyMessage created";
         BOOST_REQUIRE(res_msg!=0);
         ofp_header *msgHdr = (ofp_header *)res_msg->data;
-        cStatsManager* pSM = dynamic_cast<cStatsManager*>(statsManager);
-        pSM->testInjectTxnId(msgHdr->xid);
+        statsManager->testInjectTxnId(msgHdr->xid);
 
         // send first flow stats reply message
         statsManager->Handle(&portConn,
@@ -446,7 +394,7 @@ public:
         LOG(DEBUG) << "2 makeFlowStatReplyMessage created";
         BOOST_REQUIRE(res_msg!=0);
         msgHdr = (ofp_header *)res_msg->data;
-        pSM->testInjectTxnId(msgHdr->xid);
+        statsManager->testInjectTxnId(msgHdr->xid);
 
         // send second flow stats reply message
         statsManager->Handle(&portConn,
@@ -472,7 +420,6 @@ public:
         verifyFlowStats(classifier,
                         exp_classifier_packet_count,
                         exp_classifier_packet_count * PACKET_SIZE,
-                        isExistingMetric,
                         table_id,statsManager,srcEpg,dstEpg);
 
         LOG(DEBUG) << "FlowStatsReplyMessage verification successful";

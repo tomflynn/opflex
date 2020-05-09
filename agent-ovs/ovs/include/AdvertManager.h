@@ -85,11 +85,7 @@ public:
         /**
          * Broadcast RARP endpoint advertisements. Only for TunnelEp
          */
-        EPADV_RARP_BROADCAST,
-        /**
-         * Broadcast RARP and GARP endpoint advertisements. Only for TunnelEp
-         */
-        EPADV_GARP_RARP_BROADCAST
+        EPADV_RARP_BROADCAST
     };
 
     /**
@@ -195,18 +191,6 @@ private:
      * @param uuid the UUID of the service
      */
     void sendServiceAdvs(const std::string& uuid);
-
-    /**
-     * Synchronously send GARP for tunnel endpoints
-     * @param uuid the UUID of the tunnel ep
-     */
-    void sendTunnelEpGarp(const std::string& uuid);
-
-    /**
-     * Synchronously send RARP for tunnel endpoints
-     * @param uuid the UUID of the tunnel ep
-     */
-    void sendTunnelEpRarp(const std::string& uuid);
 
     /**
      * Synchronously send advertisements for tunnel endpoints

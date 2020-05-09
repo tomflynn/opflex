@@ -107,7 +107,7 @@ void diffTables(Agent& agent,
 
 enum REG {
     SEPG, SEPG12, DEPG, BD, FD, FD12, RD, OUTPORT,
-    SVCADDR1, SVCADDR2, SVCADDR3, SVCADDR4, CTMARK, TUNID, TUNSRC, TUNDST,
+    SVCADDR1, SVCADDR2, SVCADDR3, SVCADDR4, TUNID, TUNSRC, TUNDST,
     VLAN, ETHSRC, ETHDST, ARPOP, ARPSHA, ARPTHA, ARPSPA, ARPTPA, METADATA,
     PKT_MARK
 };
@@ -139,7 +139,6 @@ public:
     Bldr& tunId(uint32_t id) { m("tun_id", str(id, true)); return *this; }
     Bldr& in(uint32_t p) { m("in_port", str(p)); return *this; }
     Bldr& reg(REG r, uint32_t v);
-    Bldr& reg(REG r, const std::string& v);
     Bldr& isEthSrc(const std::string& s) { m("dl_src", s); return *this; }
     Bldr& isEthDst(const std::string& s) { m("dl_dst", s); return *this; }
     Bldr& ip() { m("ip"); return *this; }
@@ -211,7 +210,6 @@ public:
         m("metadata", str(a, true) + "/0xff"); return *this;
     }
     Bldr& isPolicyApplied() { m("metadata", "0x100/0x100"); return *this; }
-    Bldr& isToHostAccess() { m("metadata", "0x8/0xff"); return *this; }
     Bldr& isFromServiceIface(bool yes = true) {
         m() << "metadata=" << (yes ? "0x200" : "0") << "/0x200";
         return *this;

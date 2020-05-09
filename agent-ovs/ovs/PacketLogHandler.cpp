@@ -31,8 +31,6 @@ void LocalClient::run() {
     for(;;) {
         if(stopped) {
             boost::system::error_code ec;
-            clientSocket.shutdown(
-		    boost::asio::local::stream_protocol::socket::shutdown_both);
             clientSocket.cancel(ec);
             clientSocket.close(ec);
             break;
@@ -41,9 +39,8 @@ void LocalClient::run() {
             try {
                 clientSocket.connect(remoteEndpoint);
                 connected = true;
-                LOG(INFO) << "Connected to packet event exporter socket";
             } catch (std::exception &e) {
-                LOG(TRACE) << "Failed to connect to packet event exporter socket:"
+                LOG(ERROR) << "Failed to connect to packet event exporter socket:"
                         << e.what();
                 std::this_thread::sleep_for(std::chrono::seconds(2));
                 continue;

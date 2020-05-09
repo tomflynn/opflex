@@ -274,7 +274,7 @@ void CommunicationPeer::readBufNoNull(char* buffer,
 void CommunicationPeer::readBuffer(
         char * buffer,
         size_t nread,
-        bool canWriteJustPastTheEnd) {
+        bool canWriteJustPastTheEnd) const {
 
     VLOG(6)
         << "nread "
@@ -312,7 +312,7 @@ void CommunicationPeer::readBuffer(
 
 }
 
-void CommunicationPeer::readBufferZ(char const * buffer, size_t nread) {
+void CommunicationPeer::readBufferZ(char const * buffer, size_t nread) const {
 
     size_t chunk_size;
 
@@ -332,10 +332,17 @@ void CommunicationPeer::readBufferZ(char const * buffer, size_t nread) {
         chunk_size = readChunk(buffer);
         nread -= chunk_size++;
 
-        VLOG(6) << "nread=" << nread << " chunk_size=" << chunk_size;
+        VLOG(6)
+            << "nread="
+            << nread
+            << " chunk_size="
+            << chunk_size
+        ;
 
         if(!nread) {
+
             break;
+
         }
 
         buffer += chunk_size;
@@ -345,26 +352,76 @@ void CommunicationPeer::readBufferZ(char const * buffer, size_t nread) {
             );
 
         if (!msg) {
-            LOG(ERROR) << "skipping inbound message";
+            LOG(ERROR)
+                << "skipping inbound message"
+            ;
             continue;
         }
 
         msg->process();
+
     }
 }
 
-void CommunicationPeer::onWrite() {
-    transport_.callbacks_->onSent_(this);
-    pendingBytes_ = 0;
-    write(); /* kick the can */
+std::ostream& operator << (
+        std::ostream& os,
+        std::vector<iovec> const & iov) {
+
+    os << "INLINE_DUMP\n";
+
+    for (size_t i = 0; i < iov.size(); ++i) {
+
+        os
+            << "("
+            << i
+            << "@"
+            << std::hex
+            << iov[i].iov_base
+            << std::dec
+            << "+"
+            << iov[i].iov_len
+        ;
+
+        if (VLOG_IS_ON(7)) {
+            size_t len = iov[i].iov_len;
+            size_t offset = 0;
+            std::string temp((const char*)iov[i].iov_base, len);
+
+            do {
+                os
+                    << "("
+                    << temp.c_str() + offset
+                    << ")"
+                    ;
+                offset += strlen(temp.c_str()) + 1;
+            } while (len > offset);
+        }
+
+        os << ")";
+
+    }
+    return os;
 }
 
-int CommunicationPeer::write() {
+void CommunicationPeer::onWrite() {
+
+    transport_.callbacks_->onSent_(this);
+
+    pendingBytes_ = 0;
+
+    write(); /* kick the can */
+
+}
+
+int CommunicationPeer::write() const {
+
     if (pendingBytes_) {
         return 0;
     }
 
-    return transport_.callbacks_->sendCb_(this);
+    int retVal = transport_.callbacks_->sendCb_(this);
+
+    return retVal;
 }
 
 int CommunicationPeer::writeIOV(std::vector<iovec>& iov) const {
@@ -440,31 +497,54 @@ void CommunicationPeer::timeout() {
 
     if (uvRefCnt_ == 1) {
         /* we already have a pending close */
-        VLOG(4) << this << " Already closing";
+        VLOG(4)
+            << this
+            << " Already closing"
+        ;
         return;
     }
 
-    if (rtt <= (keepAliveInterval_ >> 3u) ) {
-        VLOG(5) << this << " still waiting";
+    if (rtt <= (keepAliveInterval_ >> 3) ) {
+
+        VLOG(5)
+            << this
+            << " still waiting"
+        ;
+
         return;
+
     }
 
-    if (rtt > (keepAliveInterval_ << 3u) ) {
-        LOG(WARNING) << this << " tearing down the connection upon timeout";
+    if (rtt > (keepAliveInterval_ << 3) ) {
+
+        LOG(WARNING)
+            << this
+            << " tearing down the connection upon timeout"
+        ;
+
         /* close the connection and hope for the best */
         this->onDisconnect();
         return;
     }
 
     /* send echo request */
-    VLOG(5) << this << " sending a ping for keep-alive";
+    VLOG(5)
+        << this
+        << " sending a ping for keep-alive"
+    ;
+
     sendEchoReq();
 }
 
 int comms::internal::CommunicationPeer::choke() const {
 
     if (choked_) {
-        LOG(WARNING) << this << " already choked";
+
+        LOG(WARNING)
+            << this
+            << " already choked"
+        ;
+
         return 0;
     }
 
@@ -485,15 +565,24 @@ int comms::internal::CommunicationPeer::choke() const {
         const_cast<CommunicationPeer *>(this)->onDisconnect();
 
     } else {
+
         choked_ = 1;
+
     }
 
     return rc;
+
 }
 
 int comms::internal::CommunicationPeer::unchoke() const {
+
     if (!choked_) {
-        LOG(WARNING) << this << " already unchoked";
+
+        LOG(WARNING)
+            << this
+            << " already unchoked"
+        ;
+
         return 0;
     }
 
@@ -516,13 +605,16 @@ int comms::internal::CommunicationPeer::unchoke() const {
         const_cast<CommunicationPeer *>(this)->onDisconnect();
 
     } else {
+
         choked_ = 0;
+
     }
 
     return rc;
+
 }
 
-yajr::rpc::InboundMessage * comms::internal::CommunicationPeer::parseFrame() {
+yajr::rpc::InboundMessage * comms::internal::CommunicationPeer::parseFrame() const {
 
     VLOG(6)
         << this

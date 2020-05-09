@@ -373,9 +373,6 @@ mcast_daemon_LDADD = \
 
 TESTS = agent_test
 noinst_PROGRAMS = $(TESTS) integration_test policy_repo_stress framework_stress
-if RENDERER_OVS
-  noinst_PROGRAMS += integration_test_ovs
-endif
 
 agent_test_CFLAGS =
 agent_test_CXXFLAGS = \
@@ -412,8 +409,6 @@ agent_test_SOURCES = \
 	lib/test/SpanManager_test.cpp \
 	lib/test/NetflowManager_test.cpp \
 	lib/test/ServiceManager_test.cpp \
-	lib/test/SimStats_test.cpp \
-	lib/test/ExtraConfigManager_test.cpp \
 	cmd/test/agent_test.cpp
 
 agent_test_LDADD = \
@@ -438,6 +433,7 @@ if RENDERER_OVS
 	ovs/test/include/MockPortMapper.h \
 	ovs/test/include/MockFlowExecutor.h \
 	ovs/test/include/MockFlowReader.h \
+	ovs/test/include/MockJsonRpc.h \
 	ovs/test/include/MockRpcConnection.h \
 	ovs/test/include/MockSwitchManager.h \
 	ovs/test/include/FlowManagerFixture.h \
@@ -592,7 +588,8 @@ if HAVE_DOXYGEN
 endif
 
 integration_test_CXXFLAGS = \
-	$(BOOST_CPPFLAGS) -DBOOST_TEST_DYN_LINK
+	$(BOOST_CPPFLAGS) -DBOOST_TEST_DYN_LINK \
+	-I$(top_srcdir)/integration-test/include
 if ENABLE_TSAN
   integration_test_CXXFLAGS += -fsanitize=thread
 endif
@@ -621,19 +618,14 @@ integration_test_LDADD = \
 	libopflex_agent.la
 
 if RENDERER_OVS
-  integration_test_ovs_SOURCES = \
+  integration_test_SOURCES += \
 	ovs/integration-test/include/ConnectionFixture.h \
 	ovs/integration-test/connection_test.cpp \
-	ovs/integration-test/flowmod_test.cpp \
-	cmd/integration-test/integration_test.cpp
-  integration_test_ovs_CXXFLAGS = \
-	$(BOOST_CPPFLAGS) -DBOOST_TEST_DYN_LINK \
+	ovs/integration-test/flowmod_test.cpp
+  integration_test_CXXFLAGS += \
 	-I$(top_srcdir)/ovs/integration-test/include \
 	$(librenderer_openvswitch_la_CXXFLAGS)
-  integration_test_ovs_LDADD = \
-	$(BOOST_SYSTEM_LIB) \
-	$(BOOST_UNIT_TEST_FRAMEWORK_LIB) \
-	libopflex_agent.la \
+  integration_test_LDADD += \
 	$(libopenvswitch_LIBS) \
 	$(libofproto_LIBS) \
 	librenderer_openvswitch.la

@@ -290,21 +290,6 @@ public:
     bool isFeatureEnabled(FeatureList feature) { return featureFlag[feature];}
 
     /**
-     * get behavior for adding l34flows without subnet
-     * @return true if l34flows should be added without subnet,
-     * false otherwise, defaults to true
-     */
-    bool addL34FlowsWithoutSubnet() { return behaviorL34FlowsWithoutSubnet; }
-
-    /**
-     * set behavior for adding l34flows without subnet
-     * @param value the new value for behaviorL34FlowsWithoutSubnet
-     */
-    void setAddL34FlowsWithoutSubnet(bool value) {
-        behaviorL34FlowsWithoutSubnet = value;
-    }
-
-    /**
      * clear feature flags. set them to true.
      */
     void clearFeatureFlags();
@@ -423,10 +408,8 @@ private:
     // Prometheus related parameters
     bool prometheusEnabled;
     bool prometheusExposeLocalHostOnly;
-    bool prometheusExposeEpSvcNan;
     std::unordered_set<std::string> prometheusEpAttributes;
 #endif
-    bool behaviorL34FlowsWithoutSubnet;
     LogParams logParams;
 };
 

@@ -19,11 +19,15 @@ namespace yajr {
 
 template<>
 void InbReq<&yajr::rpc::method::echo>::process() const {
+
+    VLOG(6);
+
     OutboundResult (
             this,
             GeneratorFromValue(getPayload())      /* payload from inbound req */
         )
         . send();
+
 }
 
 } /* yajr::rpc namespace */

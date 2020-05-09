@@ -123,8 +123,6 @@ private:
 
     void updatePolicyStatsDropCounters(const std::string& rdURI,
                                        PolicyDropCounters_t& counters);
-
-    friend class ContractStatsManagerFixture;
 };
 
 } /* namespace opflexagent */

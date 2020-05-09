@@ -67,7 +67,8 @@ public:
     BaseIntFlowManagerFixture()
         : FlowManagerFixture(),
           intFlowManager(agent, switchManager, idGen,
-                         ctZoneManager, tunnelEpManager),
+                         ctZoneManager, pktInHandler,
+                         tunnelEpManager),
           pktInHandler(agent, intFlowManager),
           policyMgr(agent.getPolicyManager()),
           ep2_port(11), ep4_port(22) {
@@ -168,16 +169,6 @@ public:
                                 const string& proto = "",
                                 uint16_t svc_port = 0,
                                 uint16_t nh_port = 0);
-
-    /**
-     * Initialize flows in stats table for node to svc
-     * and vice versa */
-    void initExpNodeSvcStats(const string& node_ip,
-                             const string& nh_ip,
-                             uint16_t nh_port,
-                             const string& uuid,
-                             uint64_t rxCookie,
-                             uint64_t txCookie);
 
     /**
      * Initialize flows in stats table for * to svc
@@ -1447,16 +1438,8 @@ BOOST_FIXTURE_TEST_CASE(loadBalancedService_vlan, VlanIntFlowManagerFixture) {
 
 void BaseIntFlowManagerFixture::loadBalancedServiceTest() {
     setConnected();
-    LOG(DEBUG) << "#### Starting LB Service Test ####";
-
     intFlowManager.egDomainUpdated(epg0->getURI());
     intFlowManager.domainUpdated(RoutingDomain::CLASS_ID, rd0->getURI());
-
-    // cloud nodeport tests need veth_host_ac
-    portmapper.setPort("veth_host_ac", 72);
-    portmapper.setPort(72, "veth_host_ac");
-    createVethHostAccessObjects();
-    intFlowManager.endpointUpdated(vethhostac->getUUID());
 
     Service as1;
     as1.setUUID("ed84daef-1696-4b98-8c80-6b22d85f4dc2");
@@ -1475,7 +1458,6 @@ void BaseIntFlowManagerFixture::loadBalancedServiceTest() {
     sm1.addNextHopIP("169.254.169.2");
     sm1.setServicePort(53);
     sm1.setNextHopPort(5353);
-    sm1.setNodePort(33000);
     as1.addServiceMapping(sm1);
 
     Service::ServiceMapping sm2;
@@ -1484,7 +1466,6 @@ void BaseIntFlowManagerFixture::loadBalancedServiceTest() {
     sm2.addNextHopIP("2001:db8::2");
     sm2.addNextHopIP("fe80::a9:fe:a9:2");
     sm2.setServicePort(80);
-    sm1.setNodePort(33001);
     as1.addServiceMapping(sm2);
 
     as1.clearServiceMappings();
@@ -1493,6 +1474,7 @@ void BaseIntFlowManagerFixture::loadBalancedServiceTest() {
 
     sm2.addNextHopIP("fe80::a9:fe:a9:2");
     as2.addServiceMapping(sm2);
+
 
     as1.addAttribute("name", "coredns");
     as1.addAttribute("scope", "cluster");
@@ -1515,7 +1497,6 @@ void BaseIntFlowManagerFixture::loadBalancedServiceTest() {
     initExpRd();
     initExpEp(ep0, epg0);
     initExpEp(ep2, epg0);
-    initExpEp(vethhostac, epg0);
     initExpLBService(as1, as2);
     WAIT_FOR_TABLES("create", 500);
 
@@ -1538,7 +1519,6 @@ void BaseIntFlowManagerFixture::loadBalancedServiceTest() {
     initExpRd();
     initExpEp(ep0, epg0);
     initExpEp(ep2, epg0);
-    initExpEp(vethhostac, epg0);
     initExpLBService(as1, as2, true);
     WAIT_FOR_TABLES("conntrack", 500);
 
@@ -1560,18 +1540,6 @@ void BaseIntFlowManagerFixture::loadBalancedServiceTest() {
     sm2.setConntrackMode(false);
     as2.addServiceMapping(sm2);
 
-    as1.clearAttributes();
-    as1.addAttribute("name", "coredns");
-    as1.addAttribute("scope", "ext");
-    as1.addAttribute("namespace", "default");
-    as1.setServiceType(Service::LOAD_BALANCER);
-
-    as2.clearAttributes();
-    as2.addAttribute("name", "redis-master");
-    as2.addAttribute("scope", "ext");
-    as2.addAttribute("namespace", "kube-system");
-    as2.setServiceType(Service::LOAD_BALANCER);
-
     servSrc.updateService(as1);
     servSrc.updateService(as2);
     intFlowManager.serviceUpdated(as1.getUUID());
@@ -1584,7 +1552,6 @@ void BaseIntFlowManagerFixture::loadBalancedServiceTest() {
     initExpRd();
     initExpEp(ep0, epg0);
     initExpEp(ep2, epg0);
-    initExpEp(vethhostac, epg0);
     initExpLBService(as1, as2, false, true);
     WAIT_FOR_TABLES("exposed", 500);
 
@@ -1607,7 +1574,6 @@ void BaseIntFlowManagerFixture::loadBalancedServiceTest() {
     initExpRd();
     initExpEp(ep0, epg0);
     initExpEp(ep2, epg0);
-    initExpEp(vethhostac, epg0);
     initExpLBService(as1, as2, true, true);
     WAIT_FOR_TABLES("exposed conntrack", 500);
 
@@ -1624,7 +1590,6 @@ void BaseIntFlowManagerFixture::loadBalancedServiceTest() {
     initExpRd();
     initExpEp(ep0, epg0);
     initExpEp(ep2, epg0);
-    initExpEp(vethhostac, epg0);
     WAIT_FOR_TABLES("delete", 500);
 }
 
@@ -1752,17 +1717,17 @@ void BaseIntFlowManagerFixture::initExpStatic(uint8_t remoteInventoryType) {
     ADDF(Bldr().table(DROPLOG).priority(0).actions().go(SEC).done());
     ADDF(Bldr().table(STAT).priority(10).actions().go(OUT).done());
     ADDF(Bldr().table(SEC)
-            .cookie(ovs_ntohll(opflexagent::flow::cookie::TABLE_DROP_FLOW))
+            .cookie(ovs_ntohll(flow::cookie::TABLE_DROP_FLOW))
             .flags(OFPUTIL_FF_SEND_FLOW_REM)
             .priority(25).arp().actions()
             .dropLog(SEC).go(EXP_DROPLOG).done());
     ADDF(Bldr().table(SEC)
-            .cookie(ovs_ntohll(opflexagent::flow::cookie::TABLE_DROP_FLOW))
+            .cookie(ovs_ntohll(flow::cookie::TABLE_DROP_FLOW))
             .flags(OFPUTIL_FF_SEND_FLOW_REM)
             .priority(25).ip().actions()
             .dropLog(SEC).go(EXP_DROPLOG).done());
     ADDF(Bldr().table(SEC)
-            .cookie(ovs_ntohll(opflexagent::flow::cookie::TABLE_DROP_FLOW))
+            .cookie(ovs_ntohll(flow::cookie::TABLE_DROP_FLOW))
             .flags(OFPUTIL_FF_SEND_FLOW_REM)
             .priority(25).ipv6().actions()
             .dropLog(SEC).go(EXP_DROPLOG).done());
@@ -1785,19 +1750,19 @@ void BaseIntFlowManagerFixture::initExpStatic(uint8_t remoteInventoryType) {
     ADDF(Bldr().table(OUT).priority(1).isMdAct(0)
          .actions().out(OUTPORT).done());
     ADDF(Bldr().table(OUT).priority(1)
-         .isMdAct(opflexagent::flow::meta::out::REV_NAT)
+         .isMdAct(flow::meta::out::REV_NAT)
          .actions().out(OUTPORT).done());
     ADDF(Bldr().table(OUT).priority(10)
-         .cookie(ovs_ntohll(opflexagent::flow::cookie::ICMP_ERROR_V4))
-         .icmp().isMdAct(opflexagent::flow::meta::out::REV_NAT).icmp_type(3)
+         .cookie(ovs_ntohll(flow::cookie::ICMP_ERROR_V4))
+         .icmp().isMdAct(flow::meta::out::REV_NAT).icmp_type(3)
          .actions().controller(65535).done());
     ADDF(Bldr().table(OUT).priority(10)
-         .cookie(ovs_ntohll(opflexagent::flow::cookie::ICMP_ERROR_V4))
-         .icmp().isMdAct(opflexagent::flow::meta::out::REV_NAT).icmp_type(11)
+         .cookie(ovs_ntohll(flow::cookie::ICMP_ERROR_V4))
+         .icmp().isMdAct(flow::meta::out::REV_NAT).icmp_type(11)
          .actions().controller(65535).done());
     ADDF(Bldr().table(OUT).priority(10)
-         .cookie(ovs_ntohll(opflexagent::flow::cookie::ICMP_ERROR_V4))
-         .icmp().isMdAct(opflexagent::flow::meta::out::REV_NAT).icmp_type(12)
+         .cookie(ovs_ntohll(flow::cookie::ICMP_ERROR_V4))
+         .icmp().isMdAct(flow::meta::out::REV_NAT).icmp_type(12)
          .actions().controller(65535).done());
 
     if (tunPort != OFPP_NONE) {
@@ -1805,15 +1770,15 @@ void BaseIntFlowManagerFixture::initExpStatic(uint8_t remoteInventoryType) {
              .actions().go(SRC).done());
         if (remoteInventoryType != RemoteInventoryTypeEnumT::CONST_COMPLETE) {
             ADDF(Bldr().table(BR).priority(1)
-                 .actions().mdAct(opflexagent::flow::meta::out::TUNNEL)
+                 .actions().mdAct(flow::meta::out::TUNNEL)
                  .go(STAT).done());
             ADDF(Bldr().table(RT).priority(1)
-                 .actions().mdAct(opflexagent::flow::meta::out::TUNNEL)
+                 .actions().mdAct(flow::meta::out::TUNNEL)
                  .go(STAT).done());
         }
         if (intFlowManager.getEncapType() != IntFlowManager::ENCAP_VLAN) {
             ADDF(Bldr().table(OUT).priority(15)
-                .isMdAct(opflexagent::flow::meta::out::REMOTE_TUNNEL)
+                .isMdAct(flow::meta::out::REMOTE_TUNNEL)
                 .actions()
                 .move(DEPG, TUNID).move(OUTPORT, TUNDST)
                 .outPort(tunPort)
@@ -1823,7 +1788,7 @@ void BaseIntFlowManagerFixture::initExpStatic(uint8_t remoteInventoryType) {
 
     for(int i=SEC; i<=OUT; i++) {
         ADDF(Bldr().table(i)
-        .cookie(ovs_ntohll(opflexagent::flow::cookie::TABLE_DROP_FLOW))
+        .cookie(ovs_ntohll(flow::cookie::TABLE_DROP_FLOW))
         .flags(OFPUTIL_FF_SEND_FLOW_REM).priority(0)
         .actions().dropLog(i).go(EXP_DROPLOG).done());
     }
@@ -1855,12 +1820,12 @@ void BaseIntFlowManagerFixture::initExpEpg(shared_ptr<EpGroup>& epg,
             ADDF(Bldr().table(BR).priority(10)
                  .reg(SEPG, vnid).reg(FD, fdId)
                  .isPolicyApplied().isEthDst(mmac).actions()
-                 .mdAct(opflexagent::flow::meta::out::FLOOD)
+                 .mdAct(flow::meta::out::FLOOD)
                  .go(STAT).done());
         } else {
             ADDF(Bldr().table(BR).priority(10)
                  .reg(SEPG, vnid).reg(FD, fdId).isEthDst(mmac).actions()
-                 .mdAct(opflexagent::flow::meta::out::FLOOD)
+                 .mdAct(flow::meta::out::FLOOD)
                  .go(STAT).done());
         }
         break;
@@ -1872,13 +1837,13 @@ void BaseIntFlowManagerFixture::initExpEpg(shared_ptr<EpGroup>& epg,
                  .reg(SEPG, vnid).reg(FD, fdId)
                  .isPolicyApplied().isEthDst(mmac).actions()
                  .load(OUTPORT, mcast.to_v4().to_ulong())
-                 .mdAct(opflexagent::flow::meta::out::FLOOD)
+                 .mdAct(flow::meta::out::FLOOD)
                  .go(STAT).done());
         } else {
             ADDF(Bldr().table(BR).priority(10)
                  .reg(SEPG, vnid).reg(FD, fdId).isEthDst(mmac).actions()
                  .load(OUTPORT, mcast.to_v4().to_ulong())
-                 .mdAct(opflexagent::flow::meta::out::FLOOD)
+                 .mdAct(flow::meta::out::FLOOD)
                  .go(STAT).done());
         }
     }
@@ -1893,7 +1858,7 @@ void BaseIntFlowManagerFixture::initExpEpg(shared_ptr<EpGroup>& epg,
                  .load(FD, fdId).load(RD, rdId)
                  .polApplied().go(SVR).done());
             ADDF(Bldr().table(OUT).priority(10).reg(SEPG, vnid)
-                 .isMdAct(opflexagent::flow::meta::out::TUNNEL)
+                 .isMdAct(flow::meta::out::TUNNEL)
                  .actions().pushVlan().move(SEPG12, VLAN)
                  .outPort(tunPort).done());
             break;
@@ -1905,12 +1870,12 @@ void BaseIntFlowManagerFixture::initExpEpg(shared_ptr<EpGroup>& epg,
                  .load(FD, fdId).load(RD, rdId).polApplied().go(SVR).done());
             if (remoteInventoryType == RemoteInventoryTypeEnumT::CONST_NONE) {
                 ADDF(Bldr().table(OUT).priority(10).reg(SEPG, vnid)
-                     .isMdAct(opflexagent::flow::meta::out::TUNNEL)
+                     .isMdAct(flow::meta::out::TUNNEL)
                      .actions().move(SEPG, TUNID)
                      .load(TUNDST, mcast.to_v4().to_ulong())
                      .outPort(tunPort).done());
                 ADDF(Bldr().table(OUT).priority(11).reg(SEPG, vnid)
-                     .isMdAct(opflexagent::flow::meta::out::TUNNEL)
+                     .isMdAct(flow::meta::out::TUNNEL)
                      .isEthDst(rmac)
                      .actions().move(SEPG, TUNID)
                      .load(TUNDST, intFlowManager.getTunnelDst()
@@ -1918,7 +1883,7 @@ void BaseIntFlowManagerFixture::initExpEpg(shared_ptr<EpGroup>& epg,
                      .outPort(tunPort).done());
             } else {
                 ADDF(Bldr().table(OUT).priority(11).reg(SEPG, vnid)
-                     .isMdAct(opflexagent::flow::meta::out::TUNNEL)
+                     .isMdAct(flow::meta::out::TUNNEL)
                      .actions().move(SEPG, TUNID)
                      .load(TUNDST, intFlowManager.getTunnelDst()
                            .to_v4().to_ulong())
@@ -1930,10 +1895,10 @@ void BaseIntFlowManagerFixture::initExpEpg(shared_ptr<EpGroup>& epg,
     ADDF(Bldr().table(POL).priority(8292).reg(SEPG, vnid)
          .reg(DEPG, vnid).actions().go(STAT).done());
     ADDF(Bldr().table(OUT).priority(10)
-         .reg(OUTPORT, vnid).isMdAct(opflexagent::flow::meta::out::RESUBMIT_DST)
+         .reg(OUTPORT, vnid).isMdAct(flow::meta::out::RESUBMIT_DST)
          .actions().load(SEPG, vnid).load(BD, bdId)
          .load(FD, fdId).load(RD, rdId)
-         .load(OUTPORT, 0).load64(METADATA, opflexagent::flow::meta::ROUTED)
+         .load(OUTPORT, 0).load64(METADATA, flow::meta::ROUTED)
          .resubmit(BR).done());
 }
 
@@ -1943,7 +1908,7 @@ void BaseIntFlowManagerFixture::initExpFd(uint32_t fdId) {
 
     if (fdId != 0) {
         ADDF(Bldr().table(OUT).priority(10).reg(FD, fdId)
-             .isMdAct(opflexagent::flow::meta::out::FLOOD)
+             .isMdAct(flow::meta::out::FLOOD)
              .actions().group(fdId).done());
     }
 }
@@ -1959,7 +1924,7 @@ void BaseIntFlowManagerFixture::initExpBd(uint32_t bdId, uint32_t rdId,
              .actions().go(RT).done());
 
         /* router solicitation */
-        ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::NEIGH_DISC))
+        ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::NEIGH_DISC))
              .table(BR).priority(20).icmp6().reg(BD, bdId).reg(RD, rdId)
              .isEthDst(mmac).icmp_type(133).icmp_code(0)
              .actions().controller(65535)
@@ -1973,8 +1938,8 @@ void BaseIntFlowManagerFixture::initExpRd(uint32_t rdId,
                                           bool includeSubnets) {
     uint32_t tunPort = intFlowManager.getTunnelPort();
 
-    ADDF(Bldr().cookie(ovs_htonll(opflexagent::flow::cookie::TABLE_DROP_FLOW|
-         opflexagent::flow::cookie::RD_POL_DROP_FLOW)).flags(OFPUTIL_FF_SEND_FLOW_REM).
+    ADDF(Bldr().cookie(ovs_htonll(flow::cookie::TABLE_DROP_FLOW|
+         flow::cookie::RD_POL_DROP_FLOW)).flags(OFPUTIL_FF_SEND_FLOW_REM).
          table(POL).priority(1).reg(RD, rdId).actions().
          dropLog(POL).go(EXP_DROPLOG).done());
 
@@ -1988,26 +1953,26 @@ void BaseIntFlowManagerFixture::initExpRd(uint32_t rdId,
     if (tunPort != OFPP_NONE) {
         ADDF(Bldr().table(RT).priority(324)
              .ip().reg(RD, rdId).isIpDst("10.20.44.0/24")
-             .actions().mdAct(opflexagent::flow::meta::out::TUNNEL)
+             .actions().mdAct(flow::meta::out::TUNNEL)
              .go(STAT).done());
         ADDF(Bldr().table(RT).priority(324)
              .ip().reg(RD, rdId).isIpDst("10.20.45.0/24")
-             .actions().mdAct(opflexagent::flow::meta::out::TUNNEL)
+             .actions().mdAct(flow::meta::out::TUNNEL)
              .go(STAT).done());
         ADDF(Bldr().table(RT).priority(332)
              .ipv6().reg(RD, rdId).isIpv6Dst("2001:db8::/32")
-             .actions().mdAct(opflexagent::flow::meta::out::TUNNEL)
+             .actions().mdAct(flow::meta::out::TUNNEL)
              .go(STAT).done());
     } else {
-        ADDF(Bldr().cookie(ovs_htonll(opflexagent::flow::cookie::TABLE_DROP_FLOW))
+        ADDF(Bldr().cookie(ovs_htonll(flow::cookie::TABLE_DROP_FLOW))
              .flags(OFPUTIL_FF_SEND_FLOW_REM).table(RT).priority(324)
              .ip().reg(RD, rdId).isIpDst("10.20.44.0/24")
              .actions().dropLog(RT).go(EXP_DROPLOG).done());
-        ADDF(Bldr().cookie(ovs_htonll(opflexagent::flow::cookie::TABLE_DROP_FLOW))
+        ADDF(Bldr().cookie(ovs_htonll(flow::cookie::TABLE_DROP_FLOW))
              .flags(OFPUTIL_FF_SEND_FLOW_REM).table(RT).priority(324)
              .ip().reg(RD, rdId).isIpDst("10.20.45.0/24")
              .actions().dropLog(RT).go(EXP_DROPLOG).done());
-        ADDF(Bldr().cookie(ovs_htonll(opflexagent::flow::cookie::TABLE_DROP_FLOW))
+        ADDF(Bldr().cookie(ovs_htonll(flow::cookie::TABLE_DROP_FLOW))
              .flags(OFPUTIL_FF_SEND_FLOW_REM).table(RT).priority(332)
              .ipv6().reg(RD, rdId).isIpv6Dst("2001:db8::/32")
              .actions().dropLog(RT).go(EXP_DROPLOG).done());
@@ -2031,7 +1996,6 @@ void BaseIntFlowManagerFixture::initExpEp(shared_ptr<Endpoint>& ep,
     if (acastIps->size() == 0) acastIps = &ips;
     uint32_t vnid = policyMgr.getVnidForGroup(epg->getURI()).get();
     uint32_t tunPort = intFlowManager.getTunnelPort();
-    bool isHostAccess = ep->getUUID().find("veth_host_ac") != std::string::npos;
 
     string bmac("ff:ff:ff:ff:ff:ff");
     uint8_t rmacArr[6];
@@ -2045,28 +2009,12 @@ void BaseIntFlowManagerFixture::initExpEp(shared_ptr<Endpoint>& ep,
              .actions().go(SRC).done());
 
         for (const string& ip : ips) {
-                    LOG(DEBUG) << "IP is " << ip;
             address ipa = address::from_string(ip);
             if (ipa.is_v4()) {
                 ADDF(Bldr().table(SEC).priority(30).ip().in(port)
                      .isEthSrc(mac).isIpSrc(ip).actions().go(SRC).done());
                 ADDF(Bldr().table(SEC).priority(40).arp().in(port)
                      .isEthSrc(mac).isSpa(ip).actions().go(SRC).done());
-                if (isHostAccess) {
-                    ADDF(Bldr().table(SEC).priority(41).arp().in(port)
-                         .isEthSrc(mac).isEthDst("ff:ff:ff:ff:ff:ff")
-                         .isSpa(ip).isArpOp(1)
-                         .actions()
-                         .move(ETHSRC, ETHDST)
-                         .load64(ETHSRC, 0xaabbccddeeff).load(ARPOP, 2)
-                         .move(ARPSHA, ARPTHA).load64(ARPSHA, 0xaabbccddeeff)
-                         .move(ARPTPA, ARPSPA)
-                         .load(ARPTPA, ipa.to_v4().to_ulong())
-                         .inport().done());
-                    ADDF(Bldr().table(SRC).priority(140).ip().in(port)
-                         .isEthSrc(mac).isIpSrc(ip).actions().load(SEPG, vnid).load(BD, bdId)
-                         .load(FD, fdId).load(RD, rdId).go(SVR).done());
-                }
             } else {
                 ADDF(Bldr().table(SEC).priority(30).ipv6().in(port)
                      .isEthSrc(mac).isIpv6Src(ip).actions().go(SRC).done());
@@ -2076,17 +2024,9 @@ void BaseIntFlowManagerFixture::initExpEp(shared_ptr<Endpoint>& ep,
             }
         }
 
-        if (isHostAccess) {
-            ADDF(Bldr().table(SEC).priority(26).ip().in(port)
-                 .isEthSrc(mac).actions().go(SRC).done());
-            ADDF(Bldr().table(SRC).priority(140).arp().in(port)
-                 .isEthSrc(mac).actions().load(SEPG, vnid).load(BD, bdId)
-                 .load(FD, fdId).load(RD, rdId).go(SVR).done());
-        } else {
-            ADDF(Bldr().table(SRC).priority(140).in(port)
-                 .isEthSrc(mac).actions().load(SEPG, vnid).load(BD, bdId)
-                 .load(FD, fdId).load(RD, rdId).go(SVR).done());
-        }
+        ADDF(Bldr().table(SRC).priority(140).in(port)
+             .isEthSrc(mac).actions().load(SEPG, vnid).load(BD, bdId)
+             .load(FD, fdId).load(RD, rdId).go(SVR).done());
     }
 
     // dest rules
@@ -2107,7 +2047,7 @@ void BaseIntFlowManagerFixture::initExpEp(shared_ptr<Endpoint>& ep,
                          .actions().load(DEPG, vnid)
                          .load(OUTPORT, port).ethSrc(rmac)
                          .ethDst(mac).decTtl()
-                         .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+                         .meta(flow::meta::ROUTED, flow::meta::ROUTED)
                          .go(POL).done());
                     if (ep->isDiscoveryProxyMode()) {
                         // proxy arp
@@ -2171,13 +2111,13 @@ void BaseIntFlowManagerFixture::initExpEp(shared_ptr<Endpoint>& ep,
                              .actions().load(DEPG, vnid)
                              .load(OUTPORT, port).ethSrc(rmac)
                              .ethDst(mac).decTtl()
-                             .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+                             .meta(flow::meta::ROUTED, flow::meta::ROUTED)
                              .go(POL).done());
                     }
                     if (ep->isDiscoveryProxyMode()) {
                         // proxy neighbor discovery
                         ADDF(Bldr()
-                             .cookie(ovs_ntohll(opflexagent::flow::cookie::NEIGH_DISC))
+                             .cookie(ovs_ntohll(flow::cookie::NEIGH_DISC))
                              .table(BR).priority(20).icmp6()
                              .reg(BD, bdId).reg(RD, rdId).isEthDst(mmac)
                              .icmp_type(135).icmp_code(0)
@@ -2236,7 +2176,7 @@ void BaseIntFlowManagerFixture::initExpEp(shared_ptr<Endpoint>& ep,
                      .actions()
                      .ethSrc(rmac).ethDst(mac)
                      .decTtl().outPort(port).done());
-                ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::NEIGH_DISC))
+                ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::NEIGH_DISC))
                      .table(SVD).priority(51).icmp6()
                      .reg(RD, rdId).isEthDst(mmac)
                      .icmp_type(135).icmp_code(0)
@@ -2256,13 +2196,6 @@ void BaseIntFlowManagerFixture::initExpEp(shared_ptr<Endpoint>& ep,
         ADDF(Bldr().table(OUT).priority(2)
              .reg(OUTPORT, port).isMd("0x403/0x4ff").in(port)
              .actions().inport().done());
-        if (isHostAccess) {
-            ADDF(Bldr().table(OUT).priority(15).ip()
-                .isToHostAccess().actions()
-                .ethSrc(rmac).ethDst(mac).decTtl()
-                .ct("commit,zone=1")
-                .outPort(port).done());
-        }
     }
 }
 
@@ -2289,14 +2222,14 @@ void BaseIntFlowManagerFixture::initSubnets(PolicyManager::subnet_vector_t& sns,
 
         if (rip.is_v6()) {
             ADDF(Bldr()
-                 .cookie(ovs_ntohll(opflexagent::flow::cookie::NEIGH_DISC))
+                 .cookie(ovs_ntohll(flow::cookie::NEIGH_DISC))
                  .table(BR).priority(22).icmp6()
                  .reg(BD, bdId).reg(RD, rdId).in(tunPort)
                  .isEthDst(mmac).icmp_type(135).icmp_code(0)
                  .isNdTarget(rip.to_string())
                  .actions().drop().done());
             ADDF(Bldr()
-                 .cookie(ovs_ntohll(opflexagent::flow::cookie::NEIGH_DISC))
+                 .cookie(ovs_ntohll(flow::cookie::NEIGH_DISC))
                  .table(BR).priority(20).icmp6()
                  .reg(BD, bdId).reg(RD, rdId)
                  .isEthDst(mmac).icmp_type(135).icmp_code(0)
@@ -2456,12 +2389,12 @@ void BaseIntFlowManagerFixture::initExpIpMapping(bool natEpgMap, bool nextHop) {
          .ipDst("10.20.44.2").decTtl()
          .load(DEPG, 0xa0a).load(BD, 1).load(FD, 0)
          .load(RD, 1).load(OUTPORT, port)
-         .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+         .meta(flow::meta::ROUTED, flow::meta::ROUTED)
          .go(NAT).done());
     ADDF(Bldr().table(RT).priority(450).ip().reg(RD, 2)
          .isIpDst("5.5.5.5")
          .actions().load(DEPG, 0x4242).load(OUTPORT, 0x4242)
-         .mdAct(opflexagent::flow::meta::out::RESUBMIT_DST)
+         .mdAct(flow::meta::out::RESUBMIT_DST)
          .go(POL).done());
     ADDF(Bldr().table(BR).priority(20).arp()
          .reg(BD, 2).reg(RD, 2)
@@ -2489,14 +2422,14 @@ void BaseIntFlowManagerFixture::initExpIpMapping(bool natEpgMap, bool nextHop) {
          .ipv6Dst("2001:db8::2").decTtl()
          .load(DEPG, 0xa0a).load(BD, 1).load(FD, 0)
          .load(RD, 1).load(OUTPORT, port)
-         .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+         .meta(flow::meta::ROUTED, flow::meta::ROUTED)
          .go(NAT).done());
     ADDF(Bldr().table(RT).priority(450).ipv6().reg(RD, 2)
          .isIpv6Dst("fdf1:9f86:d1af:6cc9::5")
          .actions().load(DEPG, 0x4242).load(OUTPORT, 0x4242)
-         .mdAct(opflexagent::flow::meta::out::RESUBMIT_DST)
+         .mdAct(flow::meta::out::RESUBMIT_DST)
          .go(POL).done());
-    ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::NEIGH_DISC))
+    ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::NEIGH_DISC))
          .table(BR).priority(20).icmp6()
          .reg(BD, 2).reg(RD, 2).isEthDst(mmac).icmp_type(135).icmp_code(0)
          .isNdTarget("fdf1:9f86:d1af:6cc9::5")
@@ -2507,34 +2440,34 @@ void BaseIntFlowManagerFixture::initExpIpMapping(bool natEpgMap, bool nextHop) {
         ADDF(Bldr().table(RT).priority(166).ipv6().reg(RD, 1)
              .isIpv6Dst("fdf1::/16")
              .actions().load(DEPG, 0x80000001).load(OUTPORT, 0x4242)
-             .mdAct(opflexagent::flow::meta::out::NAT).go(POL).done());
+             .mdAct(flow::meta::out::NAT).go(POL).done());
         ADDF(Bldr().table(RT).priority(158).ip().reg(RD, 1)
              .isIpDst("5.0.0.0/8")
              .actions().load(DEPG, 0x80000001).load(OUTPORT, 0x4242)
-             .mdAct(opflexagent::flow::meta::out::NAT).go(POL).done());
+             .mdAct(flow::meta::out::NAT).go(POL).done());
     } else {
         ADDF(Bldr().table(RT).priority(166).ipv6().reg(RD, 1)
              .isIpv6Dst("fdf1::/16")
-             .actions().mdAct(opflexagent::flow::meta::out::TUNNEL)
+             .actions().mdAct(flow::meta::out::TUNNEL)
              .go(STAT).done());
         ADDF(Bldr().table(RT).priority(158).ip().reg(RD, 1)
              .isIpDst("5.0.0.0/8")
-             .actions().mdAct(opflexagent::flow::meta::out::TUNNEL)
+             .actions().mdAct(flow::meta::out::TUNNEL)
              .go(STAT).done());
     }
 
     ADDF(Bldr().table(NAT).priority(166).ipv6().reg(RD, 1)
          .isIpv6Src("fdf1::/16").actions()
          .load(SEPG, 0x80000001)
-         .meta(opflexagent::flow::meta::out::REV_NAT,
-               opflexagent::flow::meta::out::MASK |
-               opflexagent::flow::meta::POLICY_APPLIED).go(POL).done());
+         .meta(flow::meta::out::REV_NAT,
+               flow::meta::out::MASK |
+               flow::meta::POLICY_APPLIED).go(POL).done());
     ADDF(Bldr().table(NAT).priority(158).ip().reg(RD, 1)
          .isIpSrc("5.0.0.0/8").actions()
          .load(SEPG, 0x80000001)
-         .meta(opflexagent::flow::meta::out::REV_NAT,
-               opflexagent::flow::meta::out::MASK |
-               opflexagent::flow::meta::POLICY_APPLIED).go(POL).done());
+         .meta(flow::meta::out::REV_NAT,
+               flow::meta::out::MASK |
+               flow::meta::POLICY_APPLIED).go(POL).done());
 
     if (nextHop) {
         ADDF(Bldr().table(SRC).priority(201).ip().in(42)
@@ -2542,14 +2475,14 @@ void BaseIntFlowManagerFixture::initExpIpMapping(bool natEpgMap, bool nextHop) {
              .actions().ethSrc(rmac).ethDst(epmac).ipDst("10.20.44.2").decTtl()
              .load(DEPG, 0xa0a).load(BD, 1).load(FD, 0).load(RD, 1)
              .load(OUTPORT, 0x50)
-             .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+             .meta(flow::meta::ROUTED, flow::meta::ROUTED)
              .go(NAT).done());
         ADDF(Bldr().table(SRC).priority(200).isPktMark(1).ip().in(42)
              .isEthSrc("42:00:42:42:42:42").isIpDst("10.20.44.2")
              .actions().ethSrc(rmac)
              .load(DEPG, 0xa0a).load(BD, 1).load(FD, 0).load(RD, 1)
              .load(OUTPORT, 0x50)
-             .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+             .meta(flow::meta::ROUTED, flow::meta::ROUTED)
              .go(NAT).done());
         ADDF(Bldr().table(SRC).priority(201).ipv6().in(42)
              .isEthSrc("42:00:42:42:42:42").isIpv6Dst("fdf1:9f86:d1af:6cc9::5")
@@ -2557,43 +2490,43 @@ void BaseIntFlowManagerFixture::initExpIpMapping(bool natEpgMap, bool nextHop) {
              .ipv6Dst("2001:db8::2").decTtl()
              .load(DEPG, 0xa0a).load(BD, 1).load(FD, 0).load(RD, 1)
              .load(OUTPORT, 0x50)
-             .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+             .meta(flow::meta::ROUTED, flow::meta::ROUTED)
              .go(NAT).done());
         ADDF(Bldr().table(SRC).priority(200).isPktMark(1).ipv6().in(42)
              .isEthSrc("42:00:42:42:42:42").isIpv6Dst("2001:db8::2")
              .actions().ethSrc(rmac)
              .load(DEPG, 0xa0a).load(BD, 1).load(FD, 0).load(RD, 1)
              .load(OUTPORT, 0x50)
-             .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+             .meta(flow::meta::ROUTED, flow::meta::ROUTED)
              .go(NAT).done());
         ADDF(Bldr().table(OUT).priority(10).ipv6()
              .reg(RD, 1).reg(OUTPORT, 0x4242)
-             .isMdAct(opflexagent::flow::meta::out::NAT).isIpv6Src("2001:db8::2")
+             .isMdAct(flow::meta::out::NAT).isIpv6Src("2001:db8::2")
              .actions().ethSrc(epmac).ethDst("42:00:42:42:42:42")
              .ipv6Src("fdf1:9f86:d1af:6cc9::5").decTtl()
              .load(PKT_MARK, 1).outPort(42).done());
         ADDF(Bldr().table(OUT).priority(10).ip()
              .reg(RD, 1).reg(OUTPORT, 0x4242)
-             .isMdAct(opflexagent::flow::meta::out::NAT).isIpSrc("10.20.44.2")
+             .isMdAct(flow::meta::out::NAT).isIpSrc("10.20.44.2")
              .actions().ethSrc(epmac).ethDst("42:00:42:42:42:42")
              .ipSrc("5.5.5.5").decTtl()
              .load(PKT_MARK, 1).outPort(42).done());
     } else {
         ADDF(Bldr().table(OUT).priority(10).ipv6()
              .reg(RD, 1).reg(OUTPORT, 0x4242)
-             .isMdAct(opflexagent::flow::meta::out::NAT).isIpv6Src("2001:db8::2")
+             .isMdAct(flow::meta::out::NAT).isIpv6Src("2001:db8::2")
              .actions().ethSrc(epmac).ethDst(rmac)
              .ipv6Src("fdf1:9f86:d1af:6cc9::5").decTtl()
              .load(SEPG, 0x4242).load(BD, 2).load(FD, 1).load(RD, 2)
              .load(OUTPORT, 0)
-             .load64(METADATA, opflexagent::flow::meta::ROUTED).resubmit(BR).done());
+             .load64(METADATA, flow::meta::ROUTED).resubmit(BR).done());
         ADDF(Bldr().table(OUT).priority(10).ip()
              .reg(RD, 1).reg(OUTPORT, 0x4242)
-             .isMdAct(opflexagent::flow::meta::out::NAT).isIpSrc("10.20.44.2")
+             .isMdAct(flow::meta::out::NAT).isIpSrc("10.20.44.2")
              .actions().ethSrc(epmac).ethDst(rmac)
              .ipSrc("5.5.5.5").decTtl()
              .load(SEPG, 0x4242).load(BD, 2).load(FD, 1).load(RD, 2)
-             .load(OUTPORT, 0).load64(METADATA, opflexagent::flow::meta::ROUTED)
+             .load(OUTPORT, 0).load64(METADATA, flow::meta::ROUTED)
              .resubmit(BR).done());
     }
 }
@@ -2611,19 +2544,19 @@ void BaseIntFlowManagerFixture::initExpRemoteEp() {
         ADDF(Bldr().table(BR).priority(10).reg(BD, 1)
              .isEthDst("ab:cd:ef:ab:cd:ef").actions().load(DEPG, vnid)
              .load(OUTPORT, tunDst.to_v4().to_ulong())
-             .mdAct(opflexagent::flow::meta::out::REMOTE_TUNNEL)
+             .mdAct(flow::meta::out::REMOTE_TUNNEL)
              .go(POL).done());
         ADDF(Bldr().table(RT).priority(500).ip().reg(RD, 1)
              .isEthDst(rmac).isIpDst("1.3.5.7")
              .actions().load(DEPG, vnid)
              .load(OUTPORT, tunDst.to_v4().to_ulong())
-             .mdAct(opflexagent::flow::meta::out::REMOTE_TUNNEL)
+             .mdAct(flow::meta::out::REMOTE_TUNNEL)
              .go(POL).done());
         ADDF(Bldr().table(RT).priority(500).ip().reg(RD, 1)
              .isEthDst(rmac).isIpDst("2.4.6.8")
              .actions().load(DEPG, vnid)
              .load(OUTPORT, tunDst.to_v4().to_ulong())
-             .mdAct(opflexagent::flow::meta::out::REMOTE_TUNNEL)
+             .mdAct(flow::meta::out::REMOTE_TUNNEL)
              .go(POL).done());
         ADDF(Bldr().table(BR).priority(40).arp()
              .reg(BD, 1).reg(RD, 1)
@@ -2690,7 +2623,7 @@ void BaseIntFlowManagerFixture::initExpAnycastService(Service &as, int nextHop) 
              .isIpSrc("169.254.169.1")
              .actions().load(RD, 1).ipSrc("169.254.169.254")
              .decTtl()
-             .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+             .meta(flow::meta::ROUTED, flow::meta::ROUTED)
              .go(SVD).done());
         ADDF(Bldr().table(SEC).priority(100).arp().in(17)
              .isEthSrc("ed:84:da:ef:16:96").isSpa("169.254.169.1")
@@ -2700,7 +2633,7 @@ void BaseIntFlowManagerFixture::initExpAnycastService(Service &as, int nextHop) 
              .isIpv6Src("fe80::a9:fe:a9:1")
              .actions().load(RD, 1).ipv6Src("fe80::a9:fe:a9:fe")
              .decTtl()
-             .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+             .meta(flow::meta::ROUTED, flow::meta::ROUTED)
              .go(SVD).done());
 
         if (nextHop >= 2) {
@@ -2723,7 +2656,7 @@ void BaseIntFlowManagerFixture::initExpAnycastService(Service &as, int nextHop) 
                  .isIpSrc("169.254.169.2")
                  .actions().load(RD, 1).ipSrc("169.254.169.254")
                  .decTtl()
-                 .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+                 .meta(flow::meta::ROUTED, flow::meta::ROUTED)
                  .go(SVD).done());
             ADDF(Bldr().table(SEC).priority(100).arp().in(17)
                  .isEthSrc("ed:84:da:ef:16:96").isSpa("169.254.169.2")
@@ -2733,7 +2666,7 @@ void BaseIntFlowManagerFixture::initExpAnycastService(Service &as, int nextHop) 
                  .isIpv6Src("fe80::a9:fe:a9:2")
                  .actions().load(RD, 1).ipv6Src("fe80::a9:fe:a9:fe")
                  .decTtl()
-                 .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+                 .meta(flow::meta::ROUTED, flow::meta::ROUTED)
                  .go(SVD).done());
         }
     } else {
@@ -2772,7 +2705,7 @@ void BaseIntFlowManagerFixture::initExpAnycastService(Service &as, int nextHop) 
          .move(ARPSHA, ARPTHA).load(ARPSHA, "0xed84daef1696")
          .move(ARPSPA, ARPTPA).load(ARPSPA, "0xa9fea9fe")
          .inport().done());
-    ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::NEIGH_DISC))
+    ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::NEIGH_DISC))
          .table(BR).priority(51).icmp6()
          .reg(RD, 1).isEthDst(mmac)
          .icmp_type(135).icmp_code(0)
@@ -2791,7 +2724,7 @@ void BaseIntFlowManagerFixture::initExpAnycastService(Service &as, int nextHop) 
          .move(ARPSHA, ARPTHA).load(ARPSHA, "0xaabbccddeeff")
          .move(ARPSPA, ARPTPA).load(ARPSPA, "0xa9fe0101")
          .inport().done());
-    ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::NEIGH_DISC))
+    ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::NEIGH_DISC))
          .table(SVD).priority(31).icmp6()
          .reg(RD, 1).isEthSrc("ed:84:da:ef:16:96")
          .isEthDst(mmac)
@@ -2940,20 +2873,12 @@ void BaseIntFlowManagerFixture::initExpAnySvcStats (const string& nh_ip,
         ADDF(Bldr(SEND_FLOW_REM).table(STAT)
              .cookie(rxCookie)
              .priority(97).udp()
-<<<<<<< HEAD
-=======
-             .reg(CTMARK, "0/0x80000000")
->>>>>>> origin/master
              .isIpDst(nh_ip).isTpDst(nh_port)
              .actions().go(OUT).done());
         // from svc
         ADDF(Bldr(SEND_FLOW_REM).table(STAT)
              .cookie(txCookie)
              .priority(97).udp()
-<<<<<<< HEAD
-=======
-             .reg(CTMARK, "0/0x80000000")
->>>>>>> origin/master
              .isIpSrc(nh_ip).isTpSrc(nh_port)
              .actions().go(OUT).done());
     } else {
@@ -2961,49 +2886,13 @@ void BaseIntFlowManagerFixture::initExpAnySvcStats (const string& nh_ip,
         ADDF(Bldr(SEND_FLOW_REM).table(STAT)
              .cookie(rxCookie)
              .priority(97).tcp6()
-<<<<<<< HEAD
-=======
-             .reg(CTMARK, "0/0x80000000")
->>>>>>> origin/master
              .isIpv6Dst(nh_ip).isTpDst(nh_port)
              .actions().go(OUT).done());
         // from svc
         ADDF(Bldr(SEND_FLOW_REM).table(STAT)
              .cookie(txCookie)
              .priority(97).tcp6()
-<<<<<<< HEAD
-=======
-             .reg(CTMARK, "0/0x80000000")
->>>>>>> origin/master
              .isIpv6Src(nh_ip).isTpSrc(nh_port)
-             .actions().go(OUT).done());
-    }
-}
-
-void BaseIntFlowManagerFixture::initExpNodeSvcStats (const string& node_ip,
-                                                     const string& nh_ip,
-                                                     uint16_t nh_port,
-                                                     const string& uuid,
-                                                     uint64_t rxCookie,
-                                                     uint64_t txCookie)
-{
-    address ipa = address::from_string(nh_ip);
-    if (ipa.is_v4()) {
-        // to svc
-        ADDF(Bldr(SEND_FLOW_REM).table(STAT)
-             .cookie(rxCookie)
-             .priority(98).udp()
-             .isIpSrc(node_ip)
-             .isIpDst(nh_ip)
-             .isTpDst(nh_port)
-             .actions().go(OUT).done());
-        // from svc
-        ADDF(Bldr(SEND_FLOW_REM).table(STAT)
-             .cookie(txCookie)
-             .priority(98).udp()
-             .isIpSrc(nh_ip)
-             .isIpDst(node_ip)
-             .isTpSrc(nh_port)
              .actions().go(OUT).done());
     }
 }
@@ -3019,7 +2908,6 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
     memcpy(rmacArr, intFlowManager.getRouterMacAddr(), sizeof(rmacArr));
     string rmac = MAC(rmacArr).toString();
 
-<<<<<<< HEAD
     initExpPodServiceStats("169.254.169.254", ep0, as1, "udp", 53, 5353);
     initExpPodServiceStats("169.254.169.254", ep2, as1, "udp", 53, 5353);
     initExpPodServiceStats("169.254.169.254", ep3, as1, "udp", 53, 5353);
@@ -3050,102 +2938,17 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
 
     initExpAnySvcStats("10.20.44.2", 5353, as1.getUUID(), rxCookie1, txCookie1);
     initExpAnySvcStats("2001:db8::2", 80, as2.getUUID(), rxCookie2, txCookie2);
-=======
-    uint64_t rxCookie1 = 0;
-    uint64_t txCookie1 = 0;
-    uint64_t rxCookie2 = 0;
-    uint64_t txCookie2 = 0;
-    if (!exposed) {
-        initExpPodServiceStats("169.254.169.254", ep0, as1, "udp", 53, 5353);
-        initExpPodServiceStats("169.254.169.254", ep2, as1, "udp", 53, 5353);
-        initExpPodServiceStats("169.254.169.254", ep3, as1, "udp", 53, 5353);
-        initExpPodServiceStats("169.254.169.254", ep4, as1, "udp", 53, 5353);
-        initExpPodServiceStats("fe80::a9:fe:a9:fe", ep0, as2, "tcp", 80, 80);
-
-        const string& anyToSvcKey1 = "antosvc:svc-tgt:"+as1.getUUID()+":10.20.44.2";
-        const string& svcToAnyKey1 = "svctoan:svc-tgt:"+as1.getUUID()+":10.20.44.2";
-        const string& anyToSvcKey2 = "antosvc:svc-tgt:"+as2.getUUID()+":2001:db8::2";
-        const string& svcToAnyKey2 = "svctoan:svc-tgt:"+as2.getUUID()+":2001:db8::2";
-        WAIT_FOR_DO_ONFAIL((idGen.getIdNoAlloc("svcstats", anyToSvcKey1) != (uint32_t)-1),
-                            500,,
-                            LOG(ERROR) << "cookie not yet alloc'd for: " << anyToSvcKey1;);
-        WAIT_FOR_DO_ONFAIL((idGen.getIdNoAlloc("svcstats", svcToAnyKey1) != (uint32_t)-1),
-                            500,,
-                            LOG(ERROR) << "cookie not yet alloc'd for: " << svcToAnyKey1;);
-        WAIT_FOR_DO_ONFAIL((idGen.getIdNoAlloc("svcstats", anyToSvcKey2) != (uint32_t)-1),
-                            500,,
-                            LOG(ERROR) << "cookie not yet alloc'd for: " << anyToSvcKey2;);
-        WAIT_FOR_DO_ONFAIL((idGen.getIdNoAlloc("svcstats", svcToAnyKey2) != (uint32_t)-1),
-                            500,,
-                            LOG(ERROR) << "cookie not yet alloc'd for: " << svcToAnyKey2;);
-
-        rxCookie1 = idGen.getIdNoAlloc("svcstats", anyToSvcKey1);
-        txCookie1 = idGen.getIdNoAlloc("svcstats", svcToAnyKey1);
-        rxCookie2 = idGen.getIdNoAlloc("svcstats", anyToSvcKey2);
-        txCookie2 = idGen.getIdNoAlloc("svcstats", svcToAnyKey2);
-
-        initExpAnySvcStats("10.20.44.2", 5353, as1.getUUID(), rxCookie1, txCookie1);
-        initExpAnySvcStats("2001:db8::2", 80, as2.getUUID(), rxCookie2, txCookie2);
-
-        const string& nodeToSvcKey = "notosvc:svc-nod:"+as1.getUUID()+":10.20.44.2";
-        const string& svcToNodeKey = "svctono:svc-nod:"+as1.getUUID()+":10.20.44.2";
-        WAIT_FOR_DO_ONFAIL((idGen.getIdNoAlloc("svcstats", nodeToSvcKey) != (uint32_t)-1),
-                            500,,
-                            LOG(ERROR) << "cookie not yet alloc'd for: " << nodeToSvcKey;);
-        WAIT_FOR_DO_ONFAIL((idGen.getIdNoAlloc("svcstats", svcToNodeKey) != (uint32_t)-1),
-                            500,,
-                            LOG(ERROR) << "cookie not yet alloc'd for: " << svcToNodeKey;);
-
-        auto rxCookie = idGen.getIdNoAlloc("svcstats", nodeToSvcKey);
-        auto txCookie = idGen.getIdNoAlloc("svcstats", svcToNodeKey);
-
-        initExpNodeSvcStats("1.100.201.11", "10.20.44.2", 5353,
-                            as1.getUUID(), rxCookie, txCookie);
-    } else {
-        const string& extToSvcKey1 = "extosvc:svc-ext:"+as1.getUUID()+":10.20.44.2";
-        const string& svcToExtKey1 = "svctoex:svc-ext:"+as1.getUUID()+":10.20.44.2";
-        const string& extToSvcKey2 = "extosvc:svc-ext:"+as2.getUUID()+":2001:db8::2";
-        const string& svcToExtKey2 = "svctoex:svc-ext:"+as2.getUUID()+":2001:db8::2";
-        WAIT_FOR_DO_ONFAIL((idGen.getIdNoAlloc("svcstats", extToSvcKey1) != (uint32_t)-1),
-                            500,,
-                            LOG(ERROR) << "cookie not yet alloc'd for: " << extToSvcKey1;);
-        WAIT_FOR_DO_ONFAIL((idGen.getIdNoAlloc("svcstats", svcToExtKey1) != (uint32_t)-1),
-                            500,,
-                            LOG(ERROR) << "cookie not yet alloc'd for: " << svcToExtKey1;);
-        WAIT_FOR_DO_ONFAIL((idGen.getIdNoAlloc("svcstats", extToSvcKey2) != (uint32_t)-1),
-                            500,,
-                            LOG(ERROR) << "cookie not yet alloc'd for: " << extToSvcKey2;);
-        WAIT_FOR_DO_ONFAIL((idGen.getIdNoAlloc("svcstats", svcToExtKey2) != (uint32_t)-1),
-                            500,,
-                            LOG(ERROR) << "cookie not yet alloc'd for: " << svcToExtKey2;);
-
-        rxCookie1 = idGen.getIdNoAlloc("svcstats", extToSvcKey1);
-        txCookie1 = idGen.getIdNoAlloc("svcstats", svcToExtKey1);
-        rxCookie2 = idGen.getIdNoAlloc("svcstats", extToSvcKey2);
-        txCookie2 = idGen.getIdNoAlloc("svcstats", svcToExtKey2);
-    }
->>>>>>> origin/master
 
     if (exposed) {
         ADDF(Bldr().table(SEC).priority(90).in(17).isVlan(4003)
              .isEthDst(mac)
              .actions()
              .popVlan().load(SEPG, 4003).load(RD, 1)
-             .meta(opflexagent::flow::meta::POLICY_APPLIED |
-                   opflexagent::flow::meta::FROM_SERVICE_INTERFACE,
-                   opflexagent::flow::meta::POLICY_APPLIED |
-                   opflexagent::flow::meta::FROM_SERVICE_INTERFACE)
+             .meta(flow::meta::POLICY_APPLIED |
+                   flow::meta::FROM_SERVICE_INTERFACE,
+                   flow::meta::POLICY_APPLIED |
+                   flow::meta::FROM_SERVICE_INTERFACE)
              .go(BR).done());
-        ADDF(Bldr().table(SEC).priority(90).arp().in(17).isVlan(4003)
-             .isEthDst(bmac).isArpOp(1)
-             .actions()
-             .popVlan().load(SEPG, 4003).load(RD, 1)
-             .meta(opflexagent::flow::meta::POLICY_APPLIED |
-                   opflexagent::flow::meta::FROM_SERVICE_INTERFACE,
-                   opflexagent::flow::meta::POLICY_APPLIED |
-                   opflexagent::flow::meta::FROM_SERVICE_INTERFACE)
-             .go(BR).done());
-<<<<<<< HEAD
         ADDF(Bldr().table(SEC).priority(90).arp().in(17).isVlan(4003)
              .isEthDst(bmac).isArpOp(1)
              .actions()
@@ -3155,8 +2958,6 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
                    flow::meta::POLICY_APPLIED |
                    flow::meta::FROM_SERVICE_INTERFACE)
              .go(BR).done());
-=======
->>>>>>> origin/master
         ADDF(Bldr().table(BR).priority(52).arp()
              .reg(RD, 1).in(17)
              .isEthDst(bmac).isTpa("1.1.1.1")
@@ -3176,7 +2977,7 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
              .move(ARPSHA, ARPTHA).load(ARPSHA, "0x133713371337")
              .move(ARPSPA, ARPTPA).load(ARPSPA, "0x1010101")
              .inport().done());
-        ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::NEIGH_DISC))
+        ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::NEIGH_DISC))
              .table(BR).priority(51).icmp6()
              .reg(RD, 1).isEthDst(mmac)
              .icmp_type(135).icmp_code(0)
@@ -3186,13 +2987,13 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
              .controller(65535).done());
 
         ADDF(Bldr().table(BR).priority(51)
-             .cookie(ovs_ntohll(opflexagent::flow::cookie::ICMP_ECHO_V4))
+             .cookie(ovs_ntohll(flow::cookie::ICMP_ECHO_V4))
              .icmp().reg(RD, 1)
              .isIpDst("1.1.1.1").icmp_type(8).icmp_code(0)
              .actions().load64(METADATA, ovs_htonll(0x100ll))
              .controller(65535).done());
         ADDF(Bldr().table(BR).priority(51)
-             .cookie(ovs_ntohll(opflexagent::flow::cookie::ICMP_ECHO_V6))
+             .cookie(ovs_ntohll(flow::cookie::ICMP_ECHO_V6))
              .icmp6().reg(RD, 1)
              .isIpv6Dst("fd82:3372:749c:631b::42").icmp_type(128).icmp_code(0)
              .actions().load64(METADATA, ovs_htonll(0x100ll))
@@ -3220,9 +3021,9 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
          .go(SVH).done());
 
     if (conntrack) {
-        string commit1 = string("commit,zone=2,exec(load:") +
+        string commit1 = string("commit,zone=1,exec(load:") +
             (exposed ? "0x80000001" : "0x1") + "->NXM_NX_CT_MARK[])";
-        string commit2 = string("commit,zone=2,exec(load:") +
+        string commit2 = string("commit,zone=1,exec(load:") +
             (exposed ? "0x80000002" : "0x2") + "->NXM_NX_CT_MARK[])";
 
         ADDF(Bldr(SEND_FLOW_REM).table(SVH)
@@ -3234,9 +3035,8 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
              .tpDst(5353).ipDst("10.20.44.2")
              .decTtl()
              .load(SVCADDR1, 0xa9fea9fe)
-             .load(CTMARK, exposed?0x80000001:0x1)
              .ct(commit1)
-             .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+             .meta(flow::meta::ROUTED, flow::meta::ROUTED)
              .go(RT).done());
         ADDF(Bldr().table(SVH).priority(100)
              .udp().reg(RD, 1).reg(OUTPORT, 1).isFromServiceIface(exposed)
@@ -3244,10 +3044,8 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
              .actions()
              .tpDst(5353).ipDst("169.254.169.2")
              .decTtl()
-             .load(SVCADDR1, 0xa9fea9fe)
-             .load(CTMARK, exposed?0x80000001:0x1)
-             .ct(commit1)
-             .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+             .load(SVCADDR1, 0xa9fea9fe).ct(commit1)
+             .meta(flow::meta::ROUTED, flow::meta::ROUTED)
              .go(RT).done());
         ADDF(Bldr(SEND_FLOW_REM).table(SVH)
              .cookie(rxCookie2)
@@ -3261,9 +3059,8 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
              .load(SVCADDR2, 0x0)
              .load(SVCADDR3, 0xa900fe)
              .load(SVCADDR4, 0xa900fe)
-             .load(CTMARK, exposed?0x80000002:0x2)
              .ct(commit2)
-             .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+             .meta(flow::meta::ROUTED, flow::meta::ROUTED)
              .go(RT).done());
         ADDF(Bldr().table(SVH).priority(100)
              .tcp6().reg(RD, 1).reg(OUTPORT, 1).isFromServiceIface(exposed)
@@ -3275,9 +3072,8 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
              .load(SVCADDR2, 0x0)
              .load(SVCADDR3, 0xa900fe)
              .load(SVCADDR4, 0xa900fe)
-             .load(CTMARK, exposed?0x80000002:0x2)
              .ct(commit2)
-             .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+             .meta(flow::meta::ROUTED, flow::meta::ROUTED)
              .go(RT).done());
     } else {
         ADDF(Bldr(SEND_FLOW_REM).table(SVH)
@@ -3289,7 +3085,7 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
              .tpDst(5353).ipDst("10.20.44.2")
              .decTtl()
              .load(SVCADDR1, 0xa9fea9fe)
-             .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+             .meta(flow::meta::ROUTED, flow::meta::ROUTED)
              .go(RT).done());
         ADDF(Bldr().table(SVH).priority(100)
              .udp().reg(RD, 1).reg(OUTPORT, 1)
@@ -3298,7 +3094,7 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
              .tpDst(5353).ipDst("169.254.169.2")
              .decTtl()
              .load(SVCADDR1, 0xa9fea9fe)
-             .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+             .meta(flow::meta::ROUTED, flow::meta::ROUTED)
              .go(RT).done());
         ADDF(Bldr(SEND_FLOW_REM).table(SVH)
              .cookie(rxCookie2)
@@ -3312,7 +3108,7 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
              .load(SVCADDR2, 0x0)
              .load(SVCADDR3, 0xa900fe)
              .load(SVCADDR4, 0xa900fe)
-             .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+             .meta(flow::meta::ROUTED, flow::meta::ROUTED)
              .go(RT).done());
         ADDF(Bldr().table(SVH).priority(100)
              .tcp6().reg(RD, 1).reg(OUTPORT, 1)
@@ -3324,7 +3120,7 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
              .load(SVCADDR2, 0x0)
              .load(SVCADDR3, 0xa900fe)
              .load(SVCADDR4, 0xa900fe)
-             .meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+             .meta(flow::meta::ROUTED, flow::meta::ROUTED)
              .go(RT).done());
     }
 
@@ -3335,39 +3131,39 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
                  .isCtState("-trk").udp().reg(RD, 1).in(tunPort)
                  .isIpSrc("10.20.44.2").isTpSrc(5353)
                  .actions().pushVlan().move(SEPG12, VLAN)
-                 .ct("table=2,zone=2").done());
+                 .ct("table=2,zone=1").done());
             ADDF(Bldr().table(SVR).priority(101)
                  .isCtState("-trk").udp().reg(RD, 1).in(tunPort)
                  .isIpSrc("169.254.169.2").isTpSrc(5353)
                  .actions().pushVlan().move(SEPG12, VLAN)
-                 .ct("table=2,zone=2").done());
+                 .ct("table=2,zone=1").done());
             ADDF(Bldr().table(SVR).priority(101)
                  .isCtState("-trk").tcp6().reg(RD, 1).in(tunPort)
                  .isIpv6Src("2001:db8::2").isTpSrc(80)
                  .actions().pushVlan().move(SEPG12, VLAN)
-                 .ct("table=2,zone=2").done());
+                 .ct("table=2,zone=1").done());
             ADDF(Bldr().table(SVR).priority(101)
                  .isCtState("-trk").tcp6().reg(RD, 1).in(tunPort)
                  .isIpv6Src("fe80::a9:fe:a9:2").isTpSrc(80)
                  .actions().pushVlan().move(SEPG12, VLAN)
-                 .ct("table=2,zone=2").done());
+                 .ct("table=2,zone=1").done());
         }
         ADDF(Bldr().table(SVR).priority(100)
              .isCtState("-trk").udp().reg(RD, 1)
              .isIpSrc("10.20.44.2").isTpSrc(5353)
-             .actions().ct("table=2,zone=2").done());
+             .actions().ct("table=2,zone=1").done());
         ADDF(Bldr().table(SVR).priority(100)
              .isCtState("-trk").udp().reg(RD, 1)
              .isIpSrc("169.254.169.2").isTpSrc(5353)
-             .actions().ct("table=2,zone=2").done());
+             .actions().ct("table=2,zone=1").done());
         ADDF(Bldr().table(SVR).priority(100)
              .isCtState("-trk").tcp6().reg(RD, 1)
              .isIpv6Src("2001:db8::2").isTpSrc(80)
-             .actions().ct("table=2,zone=2").done());
+             .actions().ct("table=2,zone=1").done());
         ADDF(Bldr().table(SVR).priority(100)
              .isCtState("-trk").tcp6().reg(RD, 1)
              .isIpv6Src("fe80::a9:fe:a9:2").isTpSrc(80)
-             .actions().ct("table=2,zone=2").done());
+             .actions().ct("table=2,zone=1").done());
 
         if (exposed) {
             ADDF(Bldr(SEND_FLOW_REM).table(SVR)
@@ -3410,14 +3206,14 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
                  .udp().reg(RD, 1).isIpSrc("10.20.44.2").isTpSrc(5353)
                  .actions()
                  .tpSrc(53).ethSrc(rmac).ipSrc("169.254.169.254")
-                 .decTtl().meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+                 .decTtl().meta(flow::meta::ROUTED, flow::meta::ROUTED)
                  .go(BR).done());
             ADDF(Bldr().table(SVR).priority(100)
                  .isCtState("-new+est-inv+trk").isCtMark("0x1")
                  .udp().reg(RD, 1).isIpSrc("169.254.169.2").isTpSrc(5353)
                  .actions()
                  .tpSrc(53).ethSrc(rmac).ipSrc("169.254.169.254")
-                 .decTtl().meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+                 .decTtl().meta(flow::meta::ROUTED, flow::meta::ROUTED)
                  .go(BR).done());
             ADDF(Bldr(SEND_FLOW_REM).table(SVR)
                  .cookie(txCookie2)
@@ -3426,14 +3222,14 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
                  .tcp6().reg(RD, 1).isIpv6Src("2001:db8::2").isTpSrc(80)
                  .actions()
                  .ethSrc(rmac).ipv6Src("fe80::a9:fe:a9:fe")
-                 .decTtl().meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+                 .decTtl().meta(flow::meta::ROUTED, flow::meta::ROUTED)
                  .go(BR).done());
             ADDF(Bldr().table(SVR).priority(100)
                  .isCtState("-new+est-inv+trk").isCtMark("0x2")
                  .tcp6().reg(RD, 1).isIpv6Src("fe80::a9:fe:a9:2").isTpSrc(80)
                  .actions()
                  .ethSrc(rmac).ipv6Src("fe80::a9:fe:a9:fe")
-                 .decTtl().meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+                 .decTtl().meta(flow::meta::ROUTED, flow::meta::ROUTED)
                  .go(BR).done());
         }
     } else {
@@ -3478,14 +3274,14 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
                  .isIpSrc("10.20.44.2").isTpSrc(5353)
                  .actions()
                  .tpSrc(53).ethSrc(rmac).ipSrc("169.254.169.254")
-                 .decTtl().meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+                 .decTtl().meta(flow::meta::ROUTED, flow::meta::ROUTED)
                  .go(BR).done());
             ADDF(Bldr().table(SVR).priority(100)
                  .udp().reg(RD, 1)
                  .isIpSrc("169.254.169.2").isTpSrc(5353)
                  .actions()
                  .tpSrc(53).ethSrc(rmac).ipSrc("169.254.169.254")
-                 .decTtl().meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+                 .decTtl().meta(flow::meta::ROUTED, flow::meta::ROUTED)
                  .go(BR).done());
             ADDF(Bldr(SEND_FLOW_REM).table(SVR)
                  .cookie(txCookie2)
@@ -3494,14 +3290,14 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
                  .isIpv6Src("2001:db8::2").isTpSrc(80)
                  .actions()
                  .ethSrc(rmac).ipv6Src("fe80::a9:fe:a9:fe")
-                 .decTtl().meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+                 .decTtl().meta(flow::meta::ROUTED, flow::meta::ROUTED)
                  .go(BR).done());
             ADDF(Bldr().table(SVR).priority(100)
                  .tcp6().reg(RD, 1)
                  .isIpv6Src("fe80::a9:fe:a9:2").isTpSrc(80)
                  .actions()
                  .ethSrc(rmac).ipv6Src("fe80::a9:fe:a9:fe")
-                 .decTtl().meta(opflexagent::flow::meta::ROUTED, opflexagent::flow::meta::ROUTED)
+                 .decTtl().meta(flow::meta::ROUTED, flow::meta::ROUTED)
                  .go(BR).done());
         }
     }
@@ -3509,20 +3305,20 @@ void BaseIntFlowManagerFixture::initExpLBService(Service &as1,
 
 void BaseIntFlowManagerFixture::initExpVirtualIp() {
     uint32_t port = portmapper.FindPort(ep0->getInterfaceName().get());
-    ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::VIRTUAL_IP_V4))
+    ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::VIRTUAL_IP_V4))
          .table(SEC).priority(60).arp().in(port)
          .isEthSrc("42:42:42:42:42:42").isSpa("42.42.42.42")
          .actions().controller(65535).go(SRC).done());
-    ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::VIRTUAL_IP_V4))
+    ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::VIRTUAL_IP_V4))
          .table(SEC).priority(60).arp().in(port)
          .isEthSrc("42:42:42:42:42:43").isSpa("42.42.42.16/28")
          .actions().controller(65535).go(SRC).done());
-    ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::VIRTUAL_IP_V6))
+    ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::VIRTUAL_IP_V6))
          .table(SEC).priority(60).icmp6().in(port)
          .isEthSrc("42:42:42:42:42:42")
          .icmp_type(136).icmp_code(0).isNdTarget("42::42")
          .actions().controller(65535).go(SRC).done());
-    ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::VIRTUAL_IP_V6))
+    ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::VIRTUAL_IP_V6))
          .table(SEC).priority(60).icmp6().in(port)
          .isEthSrc("42:42:42:42:42:43")
          .icmp_type(136).icmp_code(0).isNdTarget("42::10/124")
@@ -3530,7 +3326,7 @@ void BaseIntFlowManagerFixture::initExpVirtualIp() {
     ADDF(Bldr().table(SEC).priority(61).arp().in(port)
          .isEthSrc("00:00:00:00:80:00").isSpa("10.20.44.3")
          .actions().go(SRC).done());
-    ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::VIRTUAL_IP_V4))
+    ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::VIRTUAL_IP_V4))
          .table(SEC).priority(60).arp().in(port)
          .isEthSrc("00:00:00:00:80:00").isSpa("10.20.44.3")
          .actions().controller(65535).go(SRC).done());
@@ -3543,7 +3339,7 @@ void BaseIntFlowManagerFixture::initExpVirtualDhcp(bool virtIp,
     uint32_t tunPort = intFlowManager.getTunnelPort();
 
     uint32_t port = portmapper.FindPort(ep0->getInterfaceName().get());
-    ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::DHCP_V4))
+    ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::DHCP_V4))
          .table(SEC).priority(35).udp().in(port)
          .isEthSrc("00:00:00:00:80:00").isTpSrc(68).isTpDst(67)
          .actions().controller(65535).done());
@@ -3574,11 +3370,11 @@ void BaseIntFlowManagerFixture::initExpVirtualDhcp(bool virtIp,
          .move(ARPSPA, ARPTPA).load(ARPSPA, hexServerIp)
          .inport().done());
 
-    ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::DHCP_V6))
+    ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::DHCP_V6))
          .table(SEC).priority(35).udp6().in(port)
          .isEthSrc("00:00:00:00:80:00").isTpSrc(546).isTpDst(547)
          .actions().controller(65535).done());
-    ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::NEIGH_DISC))
+    ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::NEIGH_DISC))
          .table(BR).priority(51).icmp6()
          .reg(BD, 1).reg(RD, 1).isEthDst(mmac)
          .icmp_type(135).icmp_code(0)
@@ -3588,19 +3384,19 @@ void BaseIntFlowManagerFixture::initExpVirtualDhcp(bool virtIp,
          .controller(65535).done());
 
     if (virtIp) {
-        ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::DHCP_V4))
+        ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::DHCP_V4))
              .table(SEC).priority(35).udp().in(port)
              .isEthSrc("42:42:42:42:42:42").isTpSrc(68).isTpDst(67)
              .actions().controller(65535).done());
-        ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::DHCP_V4))
+        ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::DHCP_V4))
              .table(SEC).priority(35).udp().in(port)
              .isEthSrc("42:42:42:42:42:43").isTpSrc(68).isTpDst(67)
              .actions().controller(65535).done());
-        ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::DHCP_V6))
+        ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::DHCP_V6))
              .table(SEC).priority(35).udp6().in(port)
              .isEthSrc("42:42:42:42:42:42").isTpSrc(546).isTpDst(547)
              .actions().controller(65535).done());
-        ADDF(Bldr().cookie(ovs_ntohll(opflexagent::flow::cookie::DHCP_V6))
+        ADDF(Bldr().cookie(ovs_ntohll(flow::cookie::DHCP_V6))
              .table(SEC).priority(35).udp6().in(port)
              .isEthSrc("42:42:42:42:42:43").isTpSrc(546).isTpDst(547)
              .actions().controller(65535).done());
@@ -3767,10 +3563,10 @@ void BaseIntFlowManagerFixture::initExpSviBD(const URI& sviBDURI,
 
     ADDF(Bldr().table(BR).priority(10)
          .reg(SEPG, fixedVnid).reg(FD, fdId).isEthDst(mmac).actions()
-         .mdAct(opflexagent::flow::meta::out::FLOOD)
+         .mdAct(flow::meta::out::FLOOD)
          .go(STAT).done());
     ADDF(Bldr().table(BR).priority(2)
-         .actions().mdAct(opflexagent::flow::meta::out::TUNNEL)
+         .actions().mdAct(flow::meta::out::TUNNEL)
          .go(STAT).done());
     if(uplink != OFPP_NONE) {
         ADDF(Bldr().table(SRC).priority(149)
@@ -3780,17 +3576,17 @@ void BaseIntFlowManagerFixture::initExpSviBD(const URI& sviBDURI,
              .load(FD, fdId).load(RD, rdId)
              .polApplied().go(SVR).done());
         ADDF(Bldr().table(OUT).priority(10).reg(SEPG, fixedVnid)
-             .isMdAct(opflexagent::flow::meta::out::TUNNEL)
+             .isMdAct(flow::meta::out::TUNNEL)
              .actions().pushVlan().move(SEPG12, VLAN)
              .outPort(uplink).done());
     }
     ADDF(Bldr().table(POL).priority(8292).reg(SEPG, fixedVnid)
          .reg(DEPG, fixedVnid).actions().go(STAT).done());
     ADDF(Bldr().table(OUT).priority(10)
-         .reg(OUTPORT, fixedVnid).isMdAct(opflexagent::flow::meta::out::RESUBMIT_DST)
+         .reg(OUTPORT, fixedVnid).isMdAct(flow::meta::out::RESUBMIT_DST)
          .actions().load(SEPG, fixedVnid).load(BD, bdId)
          .load(FD, fdId).load(RD, rdId)
-         .load(OUTPORT, 0).load64(METADATA, opflexagent::flow::meta::ROUTED)
+         .load(OUTPORT, 0).load64(METADATA, flow::meta::ROUTED)
          .resubmit(BR).done());
 }
 

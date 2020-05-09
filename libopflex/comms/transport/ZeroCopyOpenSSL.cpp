@@ -81,14 +81,14 @@ struct Cb< ZeroCopyOpenSSL >::StaticHelpers {
                      +---------+--------------+--------------+
  */
 
-    static ssize_t tryToDecrypt(CommunicationPeer* peer);
+    static ssize_t tryToDecrypt(CommunicationPeer const * peer);
     static ssize_t tryToEncrypt(CommunicationPeer const * peer);
     static int tryToSend(CommunicationPeer const * peer);
 
 };
 
 ssize_t Cb< ZeroCopyOpenSSL >::StaticHelpers::tryToDecrypt(
-        CommunicationPeer* peer) {
+        CommunicationPeer const * peer) {
 
     /* we have to process the decrypted data, if any is available */
 
@@ -106,38 +106,74 @@ ssize_t Cb< ZeroCopyOpenSSL >::StaticHelpers::tryToDecrypt(
 #  undef tryRead
 
         if (nread > 0) {
-            VLOG(6) << peer << " just decrypted " << nread
+            VLOG(6)
+                << peer
+                << " just decrypted "
+                << nread
                 << " bytes into buffer starting @"
                 << reinterpret_cast<void*>(buffer)
-                << " (" << std::string(buffer, nread) << ")";
+                << " ("
+                << std::string(buffer, nread)
+                << ")"
+            ;
             peer->readBuffer(buffer, nread, true);
             totalRead += nread;
+        } else {
+            VLOG(2)
+                << peer
+                << " nread = "
+                << nread
+                << " RETRY="
+                << BIO_should_retry     (e->bioSSL_)
+                << " R="
+                << BIO_should_read      (e->bioSSL_)
+                << " W="
+                << BIO_should_write     (e->bioSSL_)
+                << " S="
+                << BIO_should_io_special(e->bioSSL_)
+            ;
         }
     }
     IF_SSL_EMIT_ERRORS(peer) {
         IF_SSL_ERROR(sslErr) {
-            LOG(ERROR) << peer << " Failed to decrypt input: " << sslErr;
+            LOG(ERROR)
+                << peer
+                << " Failed to decrypt input: "
+                << sslErr
+            ;
         }
         const_cast<CommunicationPeer *>(peer)->onDisconnect();
     }
 
-    VLOG(totalRead ? 4 : 3) << peer << " Returning: " << (totalRead ?: nread);
+    VLOG(totalRead ? 4 : 3)
+        << peer
+        << " Returning: "
+        << (totalRead ?: nread)
+    ;
     /* short-circuit a single non-positive nread */
     return totalRead ?: nread;
+
 }
 
 ssize_t Cb< ZeroCopyOpenSSL >::StaticHelpers::tryToEncrypt(
         CommunicationPeer const * peer) {
 
-    assert(!peer->getPendingBytes());
-    if (peer->getPendingBytes()) {
-        VLOG(3) << peer << " has already got pending bytes. Should have not tried!";
+    assert(!peer->pendingBytes_);
+    if (peer->pendingBytes_) {
+        VLOG(3)
+            << peer
+            << " has already got pending bytes. Should have not tried!"
+        ;
         return 0;
     }
 
     /* we have to encrypt the plaintext data, if any is available */
-    if (peer->getStringQueue().deque_.empty()) {
-        VLOG(4) << peer << " has no data to send";
+    if (!peer->s_.deque_.size()) {
+        VLOG(4)
+            << peer
+            << " has no data to send"
+        ;
+
         return 0;
     }
 
@@ -149,8 +185,8 @@ ssize_t Cb< ZeroCopyOpenSSL >::StaticHelpers::tryToEncrypt(
 
     std::vector<iovec> iovIn =
         ::yajr::comms::internal::get_iovec(
-                peer->getStringQueue().deque_.begin(),
-                peer->getStringQueue().deque_.end()
+                peer->s_.deque_.begin(),
+                peer->s_.deque_.end()
         );
 
     std::vector<iovec>::iterator iovInIt;
@@ -177,16 +213,20 @@ ssize_t Cb< ZeroCopyOpenSSL >::StaticHelpers::tryToEncrypt(
     }
     IF_SSL_EMIT_ERRORS(peer) {
         IF_SSL_ERROR(sslErr, nwrite <= 0) {
-            LOG(ERROR) << peer << " Failed to encrypt output: " << sslErr;
+            LOG(ERROR)
+                << peer
+                << " Failed to encrypt output: "
+                << sslErr
+            ;
         }
         const_cast<CommunicationPeer *>(peer)->onDisconnect();
 
         return 0;
     }
 
-    peer->getStringQueue().deque_.erase(
-            peer->getStringQueue().deque_.begin(),
-            peer->getStringQueue().deque_.begin() + totalWrite
+    peer->s_.deque_.erase(
+            peer->s_.deque_.begin(),
+            peer->s_.deque_.begin() + totalWrite
     );
 
     /* short-circuit a single non-positive nread */
@@ -196,8 +236,14 @@ ssize_t Cb< ZeroCopyOpenSSL >::StaticHelpers::tryToEncrypt(
 int Cb< ZeroCopyOpenSSL >::StaticHelpers::tryToSend(
         CommunicationPeer const * peer) {
 
-    if (peer->getPendingBytes()) {
-        LOG(WARNING) << peer << " has already " << peer->getPendingBytes() << " pending";
+    if (peer->pendingBytes_) {
+        LOG(WARNING)
+            << peer
+            << " has already "
+            << peer->pendingBytes_
+            << " pending"
+        ;
+
         return 0;
     }
 
@@ -209,14 +255,18 @@ int Cb< ZeroCopyOpenSSL >::StaticHelpers::tryToSend(
             e->bioExternal_,
             (char**)&buf.iov_base);
 
-    VLOG(4) << peer << ": " << nread << " bytes to be sent";
+    VLOG(4)
+        << peer
+        << ": "
+        << nread
+        << " bytes to be sent"
+    ;
 
     if (nread <= 0) {
         return 0;
     }
 
-    buf.iov_len = nread;
-    peer->setPendingBytes(buf.iov_len);
+    peer->pendingBytes_ = buf.iov_len = nread;
     e->lastOutBuf_ = static_cast<char *>(buf.iov_base);
 
     std::vector<iovec> iov(1, buf);
@@ -225,9 +275,9 @@ int Cb< ZeroCopyOpenSSL >::StaticHelpers::tryToSend(
 }
 
 template<>
-int Cb< ZeroCopyOpenSSL >::send_cb(CommunicationPeer* peer) {
+int Cb< ZeroCopyOpenSSL >::send_cb(CommunicationPeer const * peer) {
 
-    assert(!peer->getPendingBytes());
+    assert(!peer->pendingBytes_);
 
     (void) Cb< ZeroCopyOpenSSL >::StaticHelpers::tryToEncrypt(peer);
     return Cb< ZeroCopyOpenSSL >::StaticHelpers::tryToSend(peer);
@@ -244,7 +294,7 @@ void Cb< ZeroCopyOpenSSL >::on_sent(CommunicationPeer const * peer) {
     ssize_t advancement = BIO_nread(
             e->bioExternal_,
             &whereTheReadShouldHaveStarted,
-            peer->getPendingBytes());
+            peer->pendingBytes_);
 
     bool giveUp = false;
 
@@ -262,12 +312,12 @@ void Cb< ZeroCopyOpenSSL >::on_sent(CommunicationPeer const * peer) {
         giveUp = true;
     }
 
-    if (advancement != static_cast<ssize_t>(peer->getPendingBytes())) {
+    if (advancement != static_cast<ssize_t>(peer->pendingBytes_)) {
 
         LOG(ERROR)
             << peer
-            << "unexpected discrepancy: peer->getPendingBytes() = "
-            << peer->getPendingBytes()
+            << "unexpected discrepancy: peer->pendingBytes_ = "
+            << peer->pendingBytes_
             << " advancement = "
             << advancement
             << " will disconnect"
@@ -277,7 +327,7 @@ void Cb< ZeroCopyOpenSSL >::on_sent(CommunicationPeer const * peer) {
     }
 
     assert(e->lastOutBuf_ == whereTheReadShouldHaveStarted);
-    assert(advancement == static_cast<ssize_t>(peer->getPendingBytes()));
+    assert(advancement == static_cast<ssize_t>(peer->pendingBytes_));
 
     if (giveUp) {
         const_cast<CommunicationPeer *>(peer)->onDisconnect();
@@ -311,7 +361,11 @@ void Cb< ZeroCopyOpenSSL >::alloc_cb(
      * the other three SSL ports.
      */
     if (!size) {
-        LOG(WARNING) << peer << " BIO pair is full, have to choke sender";
+        LOG(WARNING)
+            << peer
+            << " BIO pair is full, have to choke sender"
+        ;
+
         peer->choke();
     }
 
@@ -337,7 +391,13 @@ void Cb< ZeroCopyOpenSSL >::on_read(
 
     if (nread > 0) {
 
-        VLOG(5) << peer << " read " << nread << " into buffer of size " << buf->len;
+        VLOG(5)
+            << peer
+            << " read "
+            << nread
+            << " into buffer of size "
+            << buf->len
+        ;
 
         ZeroCopyOpenSSL * e = peer
             ->getEngine<ZeroCopyOpenSSL>();
@@ -393,12 +453,20 @@ void Cb< ZeroCopyOpenSSL >::on_read(
 
         if (decrypted <= 0) {
 
-            if (BIO_should_retry(e->bioSSL_) && !peer->getPendingBytes()) {
+            if (BIO_should_retry(e->bioSSL_) && !peer->pendingBytes_) {
                 (void) Cb< ZeroCopyOpenSSL >::StaticHelpers::tryToSend(peer);
 
-                if (peer->getPendingBytes()) {
-                    VLOG(4) << peer << " Retried to send and emitted " << peer->getPendingBytes() << " bytes";
+                if (peer->pendingBytes_) {
+
+                    VLOG(4)
+                        << peer
+                        << " Retried to send and emitted "
+                        << peer->pendingBytes_
+                        << " bytes"
+                    ;
+
                     return;
+
                 }
 
                 if (Cb< ZeroCopyOpenSSL >::StaticHelpers::
@@ -411,9 +479,10 @@ void Cb< ZeroCopyOpenSSL >::on_read(
                         << peer
                         << " Found no handshake data,"
                            " but found actual payload and sent "
-                        << peer->getPendingBytes()
+                        << peer->pendingBytes_
                         << " bytes"
                     ;
+
                 }
             }
         }
@@ -573,7 +642,10 @@ ZeroCopyOpenSSL::ZeroCopyOpenSSL(ZeroCopyOpenSSL::Ctx * ctx, bool passive)
     (ready_             = true);
 
     if (!ready_) {
-        LOG(ERROR) << "Fatal failure: " << ZeroCopyOpenSSL::dumpOpenSslErrorStackAsString();
+        LOG(ERROR)
+            << "Fatal failure: "
+            << ZeroCopyOpenSSL::dumpOpenSslErrorStackAsString()
+        ;
         this->~ZeroCopyOpenSSL();
         return;
     }
@@ -624,10 +696,14 @@ void ZeroCopyOpenSSL::infoCallback(SSL const *, int where, int ret) {
 
     switch (where) {
         case SSL_CB_HANDSHAKE_START:
-            VLOG(2) << " Handshake start!";
+            VLOG(2)
+                << " Handshake start!"
+            ;
             break;
         case SSL_CB_HANDSHAKE_DONE:
-            VLOG(2) << " Handshake done!";
+            VLOG(2)
+                << " Handshake done!"
+            ;
             break;
     }
 }
@@ -639,8 +715,13 @@ int ZeroCopyOpenSSL::Ctx::pwdCb(
         void * zcCtx) {
 
     if (!zcCtx) {
+
         assert(0);
-        LOG(ERROR) << "No zcCtx was provided";
+
+        LOG(ERROR)
+            << "No zcCtx was provided"
+        ;
+
         return 0;
     }
 
@@ -735,13 +816,24 @@ size_t ZeroCopyOpenSSL::Ctx::addCaFileOrDirectory(
     }
 
     if ((s.st_mode & S_IFDIR) && !(s.st_mode & S_IFREG)) {
+
         isDir = true;
+
     } else {
+
         if (!(s.st_mode & S_IFDIR) && (s.st_mode & S_IFREG)) {
+
             isDir = false;
+
         } else {
-            LOG(ERROR) << "Path \"" << caFileOrDirectory << "\" must be either a regular file or a directory";
+
+            LOG(ERROR)
+                << "Path \""
+                << caFileOrDirectory
+                << "\" must be either a regular file or a directory"
+            ;
             return ++failure;
+
         }
     }
 
@@ -822,7 +914,10 @@ ZeroCopyOpenSSL::Ctx * ZeroCopyOpenSSL::Ctx::createCtx(
 
     if (!sslCtx) {
         IF_SSL_ERROR(sslErr) {
-            LOG(ERROR) << "Failed to create sslCtx: " << sslErr;
+            LOG(ERROR)
+                << "Failed to create sslCtx: "
+                << sslErr
+            ;
         }
         return NULL;
     }
@@ -889,7 +984,12 @@ ZeroCopyOpenSSL::Ctx * ZeroCopyOpenSSL::Ctx::createCtx(
     assert(!ctx);
     /* FALL-THROUGH */
 
-    LOG(ERROR) << "Encountered " << failure << " failure(s)";
+    LOG(ERROR)
+        << "Encountered "
+        << failure
+        << " failure(s)"
+    ;
+
     return NULL;
 }
 
@@ -900,6 +1000,7 @@ void ZeroCopyOpenSSL::Ctx::setVerify(
             sslCtx_,
             SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
             verify_callback);
+
 }
 
 void ZeroCopyOpenSSL::Ctx::setNoVerify(
@@ -923,10 +1024,6 @@ bool ZeroCopyOpenSSL::attachTransport(
 
     CommunicationPeer * peer = dynamic_cast<CommunicationPeer *>(p);
 
-    if (!peer) {
-        return false;
-    }
-
     ZeroCopyOpenSSL * const e = new (std::nothrow)
         ZeroCopyOpenSSL(ctx, peer->passive_ ^ inverted_roles);
 
@@ -942,9 +1039,11 @@ bool ZeroCopyOpenSSL::attachTransport(
     new (peer->detachTransport()) TransportEngine< ZeroCopyOpenSSL >(e);
 
     if (!peer->choked_) {
+
         /* need to swap in the callback functions */
         peer->choke();
         peer->unchoke();
+
     }
 
     return true;

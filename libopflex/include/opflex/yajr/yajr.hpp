@@ -34,7 +34,7 @@ namespace StateChange {
 /**
  * @brief A yajr communication peer.
  */
-class Peer {
+struct Peer {
 
   public:
 

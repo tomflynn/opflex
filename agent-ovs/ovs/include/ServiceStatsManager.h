@@ -59,7 +59,7 @@ public:
     void stop();
 
     /**
-     * Timer interval handler
+     * Timer interval handler.  For unit tests only.
      */
     void on_timer(const boost::system::error_code& ec) override;
 
@@ -70,11 +70,6 @@ public:
                 int msgType,
                 ofpbuf *msg,
                 struct ofputil_flow_removed* fentry=NULL) override;
-
-    /**
-     * Update stats state
-     */
-    void update_state(const boost::system::error_code& ec);
 
     /** Interface: ObjectListener */
     // Note: This is used to delete observer MOs.

@@ -142,9 +142,11 @@ IntFlowManager::IntFlowManager(Agent& agent_,
                                SwitchManager& switchManager_,
                                IdGenerator& idGen_,
                                CtZoneManager& ctZoneManager_,
+                               PacketInHandler& pktInHandler_,
                                TunnelEpManager& tunnelEpManager_) :
     agent(agent_), switchManager(switchManager_), idGen(idGen_),
-    ctZoneManager(ctZoneManager_), tunnelEpManager(tunnelEpManager_),
+    ctZoneManager(ctZoneManager_), pktInHandler(pktInHandler_),
+    tunnelEpManager(tunnelEpManager_),
 #ifdef HAVE_PROMETHEUS_SUPPORT
     prometheusManager(agent.getPrometheusManager()),
 #endif
@@ -1266,7 +1268,6 @@ static void flowsEndpointDHCPSource(IntFlowManager& flowMgr,
 static void flowsEndpointSource(FlowEntryList& elSrc,
                                 const Endpoint& endPoint,
                                 uint32_t ofPort,
-                                bool hostAcc,
                                 bool hasMac,
                                 uint8_t* macAddr,
                                 uint8_t unkFloodMode,
@@ -1285,7 +1286,7 @@ static void flowsEndpointSource(FlowEntryList& elSrc,
         // Map on L2. Port security rules filter L2
         // and L3 before we reach this table, except
         // for promiscuous endpoints.
-        if (!endPoint.isNatMode() && !hostAcc) {
+        if (!endPoint.isNatMode()) {
             actionSource(l2Classify, epgVnid, bdId, fgrpId, rdId)
                 .build(elSrc);
             return;
@@ -1299,14 +1300,17 @@ static void flowsEndpointSource(FlowEntryList& elSrc,
             .build(elSrc);
 
         for (const string& ipStr : endPoint.getIPs()) {
-            network::cidr_t cidr;
-            if (!network::cidr_from_string(ipStr, cidr, false)) {
+
+            boost::system::error_code ec;
+
+            address addr = address::from_string(ipStr, ec);
+            if (ec) {
                 LOG(WARNING) << "Invalid endpoint IP: "
-                             << ipStr;
+                             << ipStr << ": " << ec.message();
                 continue;
             }
             actionSource(FlowBuilder().priority(140)
-                         .ipSrc(cidr.first, cidr.second)
+                         .ipSrc(addr)
                          .inPort(ofPort).ethSrc(macAddr),
                          epgVnid, bdId, fgrpId, rdId)
                 .build(elSrc);
@@ -1392,29 +1396,6 @@ static void flowRevMapCt(FlowEntryList& serviceRevFlows,
     ipRevMapCt.build(serviceRevFlows);
 }
 
-bool getHostAccess(EndpointManager& epMgr,
-                   SwitchManager& switchMgr,
-                   uint32_t& hostPort,
-                   uint8_t* hostMac) {
-    unordered_set<std::string> eps;
-    epMgr.getEndpointsByAccessIface("veth_host_ac", eps);
-    for (const std::string& ep : eps) {
-        shared_ptr<const Endpoint> epWrapper = epMgr.getEndpoint(ep);
-        if (epWrapper) {
-           const Endpoint& endPoint = *epWrapper.get();
-           bool hasMac = endPoint.getMAC() != boost::none;
-           if (hasMac)
-               endPoint.getMAC().get().toUIntArray(hostMac);
-           hostPort = OFPP_NONE;
-           const optional<string>& ofPortName = endPoint.getInterfaceName();
-           if (ofPortName)
-               hostPort = switchMgr.getPortMapper().FindPort(ofPortName.get());
-           return (hasMac && hostPort != OFPP_NONE);
-        }
-    }
-    return false;
-}
-
 void IntFlowManager::handleRemoteEndpointUpdate(const string& uuid) {
     LOG(DEBUG) << "Updating remote endpoint " << uuid;
 
@@ -1424,7 +1405,6 @@ void IntFlowManager::handleRemoteEndpointUpdate(const string& uuid) {
     if (!ep || (encapType == ENCAP_VLAN || encapType == ENCAP_NONE)) {
         switchManager.clearFlows(uuid, BRIDGE_TABLE_ID);
         switchManager.clearFlows(uuid, ROUTE_TABLE_ID);
-        switchManager.clearFlows(uuid, SRC_TABLE_ID);
         return;
     }
 
@@ -1465,27 +1445,18 @@ void IntFlowManager::handleRemoteEndpointUpdate(const string& uuid) {
 
     FlowEntryList elBridgeDst;
     FlowEntryList elRouteDst;
-<<<<<<< HEAD
-=======
-    FlowEntryList elSrc;
->>>>>>> origin/master
     std::vector<std::shared_ptr<modelgbp::inv::RemoteIp>> invIps;
 
     if (hasForwardingInfo) {
         FlowBuilder bridgeFlow;
         uint32_t outReg = 0;
         uint64_t meta;
-        uint32_t hostPort = OFPP_NONE;
-        bool hasHostMac = false;
-        uint8_t hostMac[6];
 
         if (hasTunDest) {
             outReg = tunDst->to_v4().to_ulong();
             meta = flow::meta::out::REMOTE_TUNNEL;
         } else {
             meta = flow::meta::out::HOST_ACCESS;
-            hasHostMac = getHostAccess(agent.getEndpointManager(),
-                                       switchManager, hostPort, hostMac);
         }
 
         if (hasMac) {
@@ -1500,10 +1471,6 @@ void IntFlowManager::handleRemoteEndpointUpdate(const string& uuid) {
                 .parent().build(elBridgeDst);
         }
 
-<<<<<<< HEAD
-=======
-
->>>>>>> origin/master
         // Get remote endpoint IP addresses
         ep.get()->resolveInvRemoteIp(invIps);
         for (const auto& invIp : invIps) {
@@ -1540,28 +1507,6 @@ void IntFlowManager::handleRemoteEndpointUpdate(const string& uuid) {
                     .go(POL_TABLE_ID)
                     .parent().build(elRouteDst);
             } else {
-<<<<<<< HEAD
-=======
-                /*
-                 * ingress (=> pod) uses veth_host mac and inPort
-                 * but epg from the subnet. A priority 140 rule
-                 * for veth_host subnets overrides these rules
-                 * in the source table. So the SEPG will either
-                 * be EPG of veth_host for its subnets or EPG
-                 * of ext policy for ext policy subnets programmed
-                 * here. These flows only depend on veth_host
-                 * endpoint file which should always be there in
-                 * the cloud case.
-                 */
-                if (hasHostMac && hostPort != OFPP_NONE) {
-                    actionSource(FlowBuilder().priority(10 + prefix)
-                                 .ipSrc(addr, prefix)
-                                 .inPort(hostPort).ethSrc(hostMac),
-                                 epgVnid, bdId, fgrpId, rdId)
-                         .build(elSrc);
-                }
-                // egress (<= pod)
->>>>>>> origin/master
                 routeFlow
                     .priority(10 + prefix)
                     .ethType(eth::type::IP)
@@ -1598,7 +1543,6 @@ void IntFlowManager::handleRemoteEndpointUpdate(const string& uuid) {
         }
     }
 
-    switchManager.writeFlow(uuid, SRC_TABLE_ID, elSrc);
     switchManager.writeFlow(uuid, BRIDGE_TABLE_ID, elBridgeDst);
     switchManager.writeFlow(uuid, ROUTE_TABLE_ID, elRouteDst);
 }
@@ -1661,8 +1605,9 @@ static void flowsEndpointSNAT(SnatManager& snatMgr,
     uint8_t prefixlen = 0;
 
     for (const string& ipStr : endPoint.getIPs()) {
-        network::cidr_t cidr;
-        if (!network::cidr_from_string(ipStr, cidr, false)) {
+        address nwSrc =
+            address::from_string(ipStr, ec);
+        if (ec) {
             LOG(WARNING) << "Invalid endpoint IP: "
                          << ipStr << ": " << ec.message();
             continue;
@@ -1672,14 +1617,14 @@ static void flowsEndpointSNAT(SnatManager& snatMgr,
         for (auto it = as.getDest().begin(); it != as.getDest().end(); ++it) {
             if (count >= 32) {
                 LOG(WARNING) << "Limit 32 reached when adding SNAT for rdId "
-                             << rdId << " src " << cidr.first << " dst " << *it
+                             << rdId << " src " << nwSrc << " dst " << *it
                              << " , hence skipping";
                 continue;
             }
             FlowBuilder frd;
             frd.priority(300 - count)
                .reg(6, rdId)
-               .ipSrc(cidr.first);
+               .ipSrc(nwSrc);
             std::stringstream ss(*it);
             std::string addr, mask;
             std::getline(ss, addr, '/');
@@ -1705,7 +1650,7 @@ static void flowsEndpointSNAT(SnatManager& snatMgr,
             boost::optional<Snat::PortRanges> prs = as.getPortRanges("local");
             if (prs != boost::none && prs.get().size() > 0) {
                 for (const auto& pr : prs.get()) {
-                    flowsEndpointPortRangeSNAT(as, cidr.first, nwDst, prefixlen,
+                    flowsEndpointPortRangeSNAT(as, nwSrc, nwDst, prefixlen,
                                                pr.start, pr.end,
                                                rdId, zoneId, ofPort, count,
                                                elSnat);
@@ -1717,7 +1662,7 @@ static void flowsEndpointSNAT(SnatManager& snatMgr,
         // Program reverse flows to reach this endpoint
         FlowBuilder()
             .priority(10)
-            .ipDst(cidr.first)
+            .ipDst(nwSrc)
             .conntrackState(FlowBuilder::CT_TRACKED |
                             FlowBuilder::CT_ESTABLISHED,
                             FlowBuilder::CT_TRACKED |
@@ -1760,12 +1705,12 @@ void IntFlowManager::handleEndpointUpdate(const string& uuid) {
 
     std::vector<address> ipAddresses;
     for (const string& ipStr : endPoint.getIPs()) {
-        network::cidr_t cidr;
-        if (!network::cidr_from_string(ipStr, cidr, false)) {
+        address addr = address::from_string(ipStr, ec);
+        if (ec) {
             LOG(WARNING) << "Invalid endpoint IP: "
                          << ipStr << ": " << ec.message();
         } else {
-            ipAddresses.push_back(cidr.first);
+            ipAddresses.push_back(addr);
         }
     }
     if (hasMac) {
@@ -1841,13 +1786,11 @@ void IntFlowManager::handleEndpointUpdate(const string& uuid) {
                             hasMac, macAddr, virtualDHCPEnabled,
                             hasForwardingInfo, epgVnid, rdId, bdId);
 
-    bool hostAcc = false;
     /* Add ARP responder for veth_host */
     if (uuid.find("veth_host_ac") != std::string::npos) {
-        hostAcc = true;
         for (const string& ipStr : endPoint.getIPs()) {
-            network::cidr_t cidr;
-            if (!network::cidr_from_string(ipStr, cidr, false)) {
+            address ipa = address::from_string(ipStr, ec);
+            if (ec) {
                 LOG(WARNING) << "Invalid endpoint IP: "
                              << ipStr << ": " << ec.message();
                 continue;
@@ -1857,7 +1800,7 @@ void IntFlowManager::handleEndpointUpdate(const string& uuid) {
             }
             FlowBuilder proxyArp;
             proxyArp.priority(41).inPort(ofPort)
-                .ethSrc(macAddr).arpSrc(cidr.first)
+                .ethSrc(macAddr).arpSrc(ipa)
                 .proto(arp::op::REQUEST)
                 .ethDst(packets::MAC_ADDR_BROADCAST)
                 .action()
@@ -1867,7 +1810,7 @@ void IntFlowManager::handleEndpointUpdate(const string& uuid) {
                     .regMove(MFF_ARP_SHA, MFF_ARP_THA)
                     .reg(MFF_ARP_SHA, getRouterMacAddr())
                     .regMove(MFF_ARP_TPA, MFF_ARP_SPA)
-                    .reg(MFF_ARP_TPA, cidr.first.to_v4().to_ulong())
+                    .reg(MFF_ARP_TPA, ipa.to_v4().to_ulong())
                     .output(OFPP_IN_PORT)
                     .parent().build(elPortSec);
         }
@@ -1911,7 +1854,7 @@ void IntFlowManager::handleEndpointUpdate(const string& uuid) {
                              hasMac, macAddr, ipAddresses);
 
         /* Source Table flows; applicable only to local endpoints */
-        flowsEndpointSource(elSrc, endPoint, ofPort, hostAcc,
+        flowsEndpointSource(elSrc, endPoint, ofPort,
                             hasMac, macAddr, unkFloodMode, bcastFloodMode,
                             epgVnid, bdId, fgrpId, rdId);
 
@@ -2253,26 +2196,18 @@ updateSvcStatsCounters (const uint64_t &cookie,
     // antosvc:svc-tgt:svc-uuid:nh-ip
     // svctoan:svc-tgt:svc-uuid:nh-ip
 
-    // The idgen strings for extToSvc and svcToExt will have below format
-    // extosvc:svc-ext:svc-uuid:nh-ip
-    // svctoex:svc-ext:svc-uuid:nh-ip
-
-    // The idgen strings for nodeipToSvc and svcTonodeip will have below format
-    // notosvc:svc-nod:svc-uuid:nh-ip
-    // svctono:svc-nod:svc-uuid:nh-ip
-
     const string& statType = str.get().substr(0,7);
     if ((statType == "eptosvc") || (statType == "svctoep")) {
         updatePodSvcStatsCounters(cookie,
                                   statType == "eptosvc",
                                   str.get(),
                                   newPktCount,
-                                  newByteCount);
-    } else if ((statType == "antosvc") || (statType == "svctoan")
-                || (statType == "extosvc") || (statType == "svctoex")
-                || (statType == "notosvc") || (statType == "svctono")) {
+                                  newByteCount,
+                                  attr_map(),
+                                  attr_map());
+    } else if ((statType == "antosvc") || (statType == "svctoan")) {
         updateSvcTgtStatsCounters(cookie,
-                                  (statType == "antosvc") || (statType == "extosvc") || (statType == "notosvc"),
+                                  statType == "antosvc",
                                   str.get(),
                                   newPktCount,
                                   newByteCount,
@@ -2286,8 +2221,7 @@ updateSvcStatsCounters (const bool &isIngress,
                         const string& uuid,
                         const uint64_t &newPktCount,
                         const uint64_t &newByteCount,
-                        const bool &add,
-                        const bool &isNodePort)
+                        const bool &add)
 {
     Mutator mutator(agent.getFramework(), "policyelement");
     optional<shared_ptr<SvcStatUniverse> > su =
@@ -2296,67 +2230,27 @@ updateSvcStatsCounters (const bool &isIngress,
         auto opSvc = SvcCounter::resolve(agent.getFramework(), uuid);
         if (opSvc) {
             uint64_t updPktCount = 0, updByteCount = 0;
-<<<<<<< HEAD
-=======
-            uint64_t oldPktCount = 0, oldByteCount = 0;
->>>>>>> origin/master
             if (isIngress) {
-                if (isNodePort) {
-                    oldPktCount = opSvc.get()->getNodePortRxpackets(0);
-                    oldByteCount = opSvc.get()->getNodePortRxbytes(0);
-                } else {
-                    oldPktCount = opSvc.get()->getRxpackets(0);
-                    oldByteCount = opSvc.get()->getRxbytes(0);
-                }
+                auto oldPktCount = opSvc.get()->getRxpackets(0);
+                auto oldByteCount = opSvc.get()->getRxbytes(0);
                 if (add) {
                     updPktCount = oldPktCount + newPktCount;
                     updByteCount = oldByteCount + newByteCount;
-<<<<<<< HEAD
                 } else {
                     updPktCount = oldPktCount - newPktCount;
                     updByteCount = oldByteCount - newByteCount;
-=======
-                } else {
-                    updPktCount = oldPktCount - newPktCount;
-                    updByteCount = oldByteCount - newByteCount;
-                }
-                if (isNodePort) {
-                    opSvc.get()->setNodePortRxpackets(updPktCount)
-                                .setNodePortRxbytes(updByteCount);
-                } else {
-                    opSvc.get()->setRxpackets(updPktCount)
-                                .setRxbytes(updByteCount);
->>>>>>> origin/master
                 }
                 opSvc.get()->setRxpackets(updPktCount)
                             .setRxbytes(updByteCount);
             } else {
-                if (isNodePort) {
-                    oldPktCount = opSvc.get()->getNodePortTxpackets(0);
-                    oldByteCount = opSvc.get()->getNodePortTxbytes(0);
-                } else {
-                    oldPktCount = opSvc.get()->getTxpackets(0);
-                    oldByteCount = opSvc.get()->getTxbytes(0);
-                }
+                auto oldPktCount = opSvc.get()->getTxpackets(0);
+                auto oldByteCount = opSvc.get()->getTxbytes(0);
                 if (add) {
                     updPktCount = oldPktCount + newPktCount;
                     updByteCount = oldByteCount + newByteCount;
-<<<<<<< HEAD
                 } else {
                     updPktCount = oldPktCount - newPktCount;
                     updByteCount = oldByteCount - newByteCount;
-=======
-                } else {
-                    updPktCount = oldPktCount - newPktCount;
-                    updByteCount = oldByteCount - newByteCount;
-                }
-                if (isNodePort) {
-                    opSvc.get()->setNodePortTxpackets(updPktCount)
-                                .setNodePortTxbytes(updByteCount);
-                } else {
-                    opSvc.get()->setTxpackets(updPktCount)
-                                .setTxbytes(updByteCount);
->>>>>>> origin/master
                 }
                 opSvc.get()->setTxpackets(updPktCount)
                             .setTxbytes(updByteCount);
@@ -2368,49 +2262,19 @@ updateSvcStatsCounters (const bool &isIngress,
             // This is to keep prom and modb in sync. Not doing this will update
             // prom to prior modb value during next stats update.
             if (isIngress) {
-<<<<<<< HEAD
                 prometheusManager.addNUpdateSvcCounter(uuid,
-=======
-                if (isNodePort) {
-                    prometheusManager.addNUpdateSvcCounter("nodeport-"+uuid,
-                                                   updByteCount,
-                                                   updPktCount,
-                                                   opSvc.get()->getNodePortTxbytes(0),
-                                                   opSvc.get()->getNodePortTxpackets(0),
-                                                   attr_map(), true);
-                } else {
-                    prometheusManager.addNUpdateSvcCounter(uuid,
->>>>>>> origin/master
                                                    updByteCount,
                                                    updPktCount,
                                                    opSvc.get()->getTxbytes(0),
                                                    opSvc.get()->getTxpackets(0),
                                                    attr_map());
-<<<<<<< HEAD
             } else {
                 prometheusManager.addNUpdateSvcCounter(uuid,
-=======
-                }
-            } else {
-                if (isNodePort) {
-                    prometheusManager.addNUpdateSvcCounter("nodeport-"+uuid,
-                                                   opSvc.get()->getNodePortRxbytes(0),
-                                                   opSvc.get()->getNodePortRxpackets(0),
-                                                   updByteCount,
-                                                   updPktCount,
-                                                   attr_map(), true);
-                } else {
-                    prometheusManager.addNUpdateSvcCounter(uuid,
->>>>>>> origin/master
                                                    opSvc.get()->getRxbytes(0),
                                                    opSvc.get()->getRxpackets(0),
                                                    updByteCount,
                                                    updPktCount,
                                                    attr_map());
-<<<<<<< HEAD
-=======
-                }
->>>>>>> origin/master
             }
 #endif
         }
@@ -2419,7 +2283,7 @@ updateSvcStatsCounters (const bool &isIngress,
 
 void IntFlowManager::
 updateSvcTgtStatsCounters (const uint64_t &cookie,
-                           const bool &isIngress,
+                           const bool &isAnyToSvc,
                            const string& idStr,
                            const uint64_t &newPktCount,
                            const uint64_t &newByteCount,
@@ -2432,14 +2296,11 @@ updateSvcTgtStatsCounters (const uint64_t &cookie,
     size_t pos3 = idStr.find(":", pos2+1);
     const string& svcUuid = idStr.substr(pos2+1, pos3-pos2-1);
     const string& nhipStr = idStr.substr(pos3+1);
-    const string& statType = idStr.substr(0,7);
-    const bool& isNodePort = (statType == "notosvc") || (statType == "svctono");
 
     auto opSvcTgt = SvcTargetCounter::resolve(agent.getFramework(),
                                               svcUuid, nhipStr);
     if (opSvcTgt) {
         uint64_t updPktCount = 0, updByteCount = 0;
-<<<<<<< HEAD
         if (isAnyToSvc) {
             auto oldPktCount = opSvcTgt.get()->getRxpackets(0);
             auto oldByteCount = opSvcTgt.get()->getRxbytes(0);
@@ -2454,41 +2315,6 @@ updateSvcTgtStatsCounters (const uint64_t &cookie,
             updByteCount = oldByteCount + newByteCount;
             opSvcTgt.get()->setTxpackets(updPktCount)
                            .setTxbytes(updByteCount);
-=======
-        uint64_t oldPktCount = 0, oldByteCount = 0;
-        if (isIngress) {
-            if (isNodePort) {
-                oldPktCount = opSvcTgt.get()->getNodePortRxpackets(0);
-                oldByteCount = opSvcTgt.get()->getNodePortRxbytes(0);
-                updPktCount = oldPktCount + newPktCount;
-                updByteCount = oldByteCount + newByteCount;
-                opSvcTgt.get()->setNodePortRxpackets(updPktCount)
-                               .setNodePortRxbytes(updByteCount);
-            } else {
-                oldPktCount = opSvcTgt.get()->getRxpackets(0);
-                oldByteCount = opSvcTgt.get()->getRxbytes(0);
-                updPktCount = oldPktCount + newPktCount;
-                updByteCount = oldByteCount + newByteCount;
-                opSvcTgt.get()->setRxpackets(updPktCount)
-                               .setRxbytes(updByteCount);
-            }
-        } else {
-            if (isNodePort) {
-                oldPktCount = opSvcTgt.get()->getNodePortTxpackets(0);
-                oldByteCount = opSvcTgt.get()->getNodePortTxbytes(0);
-                updPktCount = oldPktCount + newPktCount;
-                updByteCount = oldByteCount + newByteCount;
-                opSvcTgt.get()->setNodePortTxpackets(updPktCount)
-                               .setNodePortTxbytes(updByteCount);
-            } else {
-                oldPktCount = opSvcTgt.get()->getTxpackets(0);
-                oldByteCount = opSvcTgt.get()->getTxbytes(0);
-                updPktCount = oldPktCount + newPktCount;
-                updByteCount = oldByteCount + newByteCount;
-                opSvcTgt.get()->setTxpackets(updPktCount)
-                               .setTxbytes(updByteCount);
-            }
->>>>>>> origin/master
         }
 
         // following will take care of updates to these attributes
@@ -2509,30 +2335,11 @@ updateSvcTgtStatsCounters (const uint64_t &cookie,
         mutator.commit();
 #ifdef HAVE_PROMETHEUS_SUPPORT
         // MoDB takes some time to get updated. Updating prom metrics
-<<<<<<< HEAD
         // with actual value if possible that getting the values from modb.
         // This is to keep prom and modb in sync. Not doing this will update
         // prom to prior modb value during next stats update.
         if (isAnyToSvc) {
             prometheusManager.addNUpdateSvcTargetCounter(svcUuid,
-=======
-        // with actual value if possible than getting the values from modb.
-        // This is to keep prom and modb in sync. Not doing this will update
-        // prom to prior modb value during next stats update.
-        if (isIngress) {
-            if (isNodePort) {
-                prometheusManager.addNUpdateSvcTargetCounter("nodeport-"+svcUuid,
-                                                     nhipStr,
-                                                     updByteCount,
-                                                     updPktCount,
-                                                     opSvcTgt.get()->getNodePortTxbytes(0),
-                                                     opSvcTgt.get()->getNodePortTxpackets(0),
-                                                     svcAttr,
-                                                     epAttr,
-                                                     false, !epAttr.empty(), true);
-            } else {
-                prometheusManager.addNUpdateSvcTargetCounter(svcUuid,
->>>>>>> origin/master
                                                      nhipStr,
                                                      updByteCount,
                                                      updPktCount,
@@ -2540,27 +2347,9 @@ updateSvcTgtStatsCounters (const uint64_t &cookie,
                                                      opSvcTgt.get()->getTxpackets(0),
                                                      svcAttr,
                                                      epAttr,
-<<<<<<< HEAD
                                                      epAttr.size()!=0?true:false);
         } else {
             prometheusManager.addNUpdateSvcTargetCounter(svcUuid,
-=======
-                                                     false, !epAttr.empty());
-            }
-        } else {
-            if (isNodePort) {
-                prometheusManager.addNUpdateSvcTargetCounter("nodeport-"+svcUuid,
-                                                     nhipStr,
-                                                     opSvcTgt.get()->getNodePortRxbytes(0),
-                                                     opSvcTgt.get()->getNodePortRxpackets(0),
-                                                     updByteCount,
-                                                     updPktCount,
-                                                     svcAttr,
-                                                     epAttr,
-                                                     false, !epAttr.empty(), true);
-            } else {
-                prometheusManager.addNUpdateSvcTargetCounter(svcUuid,
->>>>>>> origin/master
                                                      nhipStr,
                                                      opSvcTgt.get()->getRxbytes(0),
                                                      opSvcTgt.get()->getRxpackets(0),
@@ -2568,20 +2357,11 @@ updateSvcTgtStatsCounters (const uint64_t &cookie,
                                                      updPktCount,
                                                      svcAttr,
                                                      epAttr,
-<<<<<<< HEAD
                                                      epAttr.size()!=0?true:false);
         }
 #endif
     }
     updateSvcStatsCounters(isAnyToSvc, svcUuid, newPktCount, newByteCount, true);
-=======
-                                                     false, !epAttr.empty());
-            }
-        }
-#endif
-    }
-    updateSvcStatsCounters(isIngress, svcUuid, newPktCount, newByteCount, true, isNodePort);
->>>>>>> origin/master
 }
 
 // Private function to update stats and attributes
@@ -2590,34 +2370,10 @@ updatePodSvcStatsCounters (const uint64_t &cookie,
                            const bool& isEpToSvc,
                            const string& idStr,
                            const uint64_t &newPktCount,
-                           const uint64_t &newByteCount)
+                           const uint64_t &newByteCount,
+                           const attr_map &epAttr,
+                           const attr_map &svcAttr)
 {
-    // The idgen strings for epToSvc and svcToEp will have below format
-    // eptosvc:ep-uuid:svc-uuid
-    // svctoep:ep-uuid:svc-uuid
-    size_t pos1 = idStr.find(":");
-    size_t pos2 = idStr.find(":", pos1+1);
-    const string& epUuid = idStr.substr(pos1+1, pos2-pos1-1);
-    const string& svcUuid = idStr.substr(pos2+1);
-
-    ServiceManager& svcMgr = agent.getServiceManager();
-    shared_ptr<const Service> asWrapper = svcMgr.getService(svcUuid);
-    if (!asWrapper) {
-        LOG(DEBUG) << "service not found for uuid: " << svcUuid;
-        return;
-    }
-    const Service& as = *asWrapper;
-    const attr_map &svcAttr = as.getAttributes();
-
-    EndpointManager& epMgr = agent.getEndpointManager();
-    shared_ptr<const Endpoint> epWrapper = epMgr.getEndpoint(epUuid);
-    if (!epWrapper) {
-        LOG(DEBUG) << "endpoint not found for uuid: " << epUuid;
-        return;
-    }
-    const Endpoint& endPoint = *epWrapper.get();
-    const attr_map &epAttr = endPoint.getAttributes();
-
     Mutator mutator(agent.getFramework(), "policyelement");
     optional<shared_ptr<SvcStatUniverse> > su =
         SvcStatUniverse::resolve(agent.getFramework());
@@ -2639,23 +2395,8 @@ updatePodSvcStatsCounters (const uint64_t &cookie,
             if (pEpToSvc) {
                 auto oldPktCount = pEpToSvc.get()->getPackets(0);
                 auto oldByteCount = pEpToSvc.get()->getBytes(0);
-<<<<<<< HEAD
                 pEpToSvc.get()->setPackets(oldPktCount + newPktCount)
                                .setBytes(oldByteCount + newByteCount);
-=======
-                auto updPktCount = oldPktCount + newPktCount;
-                auto updByteCount = oldByteCount + newByteCount;
-                pEpToSvc.get()->setPackets(updPktCount)
-                               .setBytes(updByteCount);
-#ifdef HAVE_PROMETHEUS_SUPPORT
-                prometheusManager.addNUpdatePodSvcCounter(true,
-                                                          idStr,
-                                                          updByteCount,
-                                                          updPktCount,
-                                                          epAttr,
-                                                          svcAttr);
-#endif
->>>>>>> origin/master
             }
         } else {
             auto pSvcToEp = su.get()->resolveGbpeSvcToEpCounter(
@@ -2674,27 +2415,18 @@ updatePodSvcStatsCounters (const uint64_t &cookie,
             if (pSvcToEp) {
                 auto oldPktCount = pSvcToEp.get()->getPackets(0);
                 auto oldByteCount = pSvcToEp.get()->getBytes(0);
-<<<<<<< HEAD
                 pSvcToEp.get()->setPackets(oldPktCount + newPktCount)
                                .setBytes(oldByteCount + newByteCount);
-=======
-                auto updPktCount = oldPktCount + newPktCount;
-                auto updByteCount = oldByteCount + newByteCount;
-                pSvcToEp.get()->setPackets(updPktCount)
-                               .setBytes(updByteCount);
-#ifdef HAVE_PROMETHEUS_SUPPORT
-                prometheusManager.addNUpdatePodSvcCounter(false,
-                                                          idStr,
-                                                          updByteCount,
-                                                          updPktCount,
-                                                          epAttr,
-                                                          svcAttr);
-#endif
->>>>>>> origin/master
             }
         }
     }
     mutator.commit();
+#ifdef HAVE_PROMETHEUS_SUPPORT
+    prometheusManager.addNUpdatePodSvcCounter(isEpToSvc,
+                                              idStr,
+                                              epAttr,
+                                              svcAttr);
+#endif
 }
 
 // Clear pod svc objects
@@ -2720,33 +2452,14 @@ void IntFlowManager::clearPodSvcStatsCounters (const std::string& uuid)
 // ServiceManager
 void IntFlowManager::clearSvcTgtStatsCounters (const std::string& svcUuid,
                                                const std::string& nhipStr,
-<<<<<<< HEAD
                                                const attr_map& svcAttr)
-=======
-                                               const attr_map& svcAttr,
-                                               bool isExternal,
-                                               bool isNodePort)
->>>>>>> origin/master
 {
     using modelgbp::observer::SvcStatUniverse;
     Mutator mutator(agent.getFramework(), "policyelement");
-    optional<shared_ptr<SvcStatUniverse> > ssu =
-                SvcStatUniverse::resolve(agent.getFramework());
-    if (!ssu)
-        return;
-
-    optional<shared_ptr<SvcCounter> > opSvc =
-                    ssu.get()->resolveGbpeSvcCounter(svcUuid);
-    if (opSvc) {
-        if ((isExternal && opSvc.get()->getScope("").compare("ext"))
-            || (!isExternal && opSvc.get()->getScope("").compare("cluster")))
-            return;
-    }
 
     auto opSvcTgt = SvcTargetCounter::resolve(agent.getFramework(),
                                               svcUuid, nhipStr);
     if (opSvcTgt) {
-<<<<<<< HEAD
         auto oldRxPktCount = opSvcTgt.get()->getRxpackets(0);
         auto oldRxByteCount = opSvcTgt.get()->getRxbytes(0);
         auto oldTxPktCount = opSvcTgt.get()->getTxpackets(0);
@@ -2763,55 +2476,11 @@ void IntFlowManager::clearSvcTgtStatsCounters (const std::string& svcUuid,
         // If the flows dont exist, reset the counts back to 0
         // also remove the extra pod specific label annotations
         prometheusManager.addNUpdateSvcTargetCounter(svcUuid,
-=======
-        if (isNodePort) {
-            auto oldRxPktCount = opSvcTgt.get()->getNodePortRxpackets(0);
-            auto oldRxByteCount = opSvcTgt.get()->getNodePortRxbytes(0);
-            auto oldTxPktCount = opSvcTgt.get()->getNodePortTxpackets(0);
-            auto oldTxByteCount = opSvcTgt.get()->getNodePortTxbytes(0);
-            opSvcTgt.get()->unsetNodePortRxbytes();
-            opSvcTgt.get()->unsetNodePortRxpackets();
-            opSvcTgt.get()->unsetNodePortTxbytes();
-            opSvcTgt.get()->unsetNodePortTxpackets();
-            updateSvcStatsCounters(true, svcUuid, oldRxPktCount, oldRxByteCount, false, true);
-            updateSvcStatsCounters(false, svcUuid, oldTxPktCount, oldTxByteCount, false, true);
-        } else {
-            auto oldRxPktCount = opSvcTgt.get()->getRxpackets(0);
-            auto oldRxByteCount = opSvcTgt.get()->getRxbytes(0);
-            auto oldTxPktCount = opSvcTgt.get()->getTxpackets(0);
-            auto oldTxByteCount = opSvcTgt.get()->getTxbytes(0);
-            opSvcTgt.get()->unsetName();
-            opSvcTgt.get()->unsetNamespace();
-            opSvcTgt.get()->unsetRxbytes();
-            opSvcTgt.get()->unsetRxpackets();
-            opSvcTgt.get()->unsetTxbytes();
-            opSvcTgt.get()->unsetTxpackets();
-            updateSvcStatsCounters(true, svcUuid, oldRxPktCount, oldRxByteCount, false);
-            updateSvcStatsCounters(false, svcUuid, oldTxPktCount, oldTxByteCount, false);
-        }
-#ifdef HAVE_PROMETHEUS_SUPPORT
-        // If the flows dont exist, reset the counts back to 0
-        // also remove the extra pod specific label annotations
-        if (isNodePort) {
-            prometheusManager.addNUpdateSvcTargetCounter("nodeport-"+svcUuid,
->>>>>>> origin/master
                                                      nhipStr,
                                                      0, 0, 0, 0,
                                                      svcAttr,
                                                      attr_map(),
-<<<<<<< HEAD
                                                      true);
-=======
-                                                     false, true, true);
-        } else {
-            prometheusManager.addNUpdateSvcTargetCounter(svcUuid,
-                                                     nhipStr,
-                                                     0, 0, 0, 0,
-                                                     svcAttr,
-                                                     attr_map(),
-                                                     false, true);
-        }
->>>>>>> origin/master
 #endif
     }
     mutator.commit();
@@ -2820,13 +2489,7 @@ void IntFlowManager::clearSvcTgtStatsCounters (const std::string& svcUuid,
 // Reset svc counter stats, deletion of the object will be handled in
 // ServiceManager
 void IntFlowManager::clearSvcStatsCounters (const std::string& uuid,
-<<<<<<< HEAD
                                             const attr_map& svcAttr)
-=======
-                                            const attr_map& svcAttr,
-                                            bool isExternal,
-                                            bool isNodePort)
->>>>>>> origin/master
 {
     using modelgbp::observer::SvcStatUniverse;
     Mutator mutator(agent.getFramework(), "policyelement");
@@ -2837,52 +2500,25 @@ void IntFlowManager::clearSvcStatsCounters (const std::string& uuid,
     optional<shared_ptr<SvcCounter> > opSvc =
                     ssu.get()->resolveGbpeSvcCounter(uuid);
     if (opSvc) {
-        if ((isExternal && opSvc.get()->getScope("").compare("ext"))
-            || (!isExternal && opSvc.get()->getScope("").compare("cluster")))
-            return;
-
         std::vector<shared_ptr<SvcTargetCounter> > out;
         opSvc.get()->resolveGbpeSvcTargetCounter(out);
         for (auto& pSvcTarget : out) {
-<<<<<<< HEAD
             pSvcTarget->unsetName();
             pSvcTarget->unsetNamespace();
             pSvcTarget->unsetRxbytes();
             pSvcTarget->unsetRxpackets();
             pSvcTarget->unsetTxbytes();
             pSvcTarget->unsetTxpackets();
-=======
-            if (isNodePort) {
-                pSvcTarget->unsetNodePortRxbytes();
-                pSvcTarget->unsetNodePortRxpackets();
-                pSvcTarget->unsetNodePortTxbytes();
-                pSvcTarget->unsetNodePortTxpackets();
-            } else {
-                pSvcTarget->unsetName();
-                pSvcTarget->unsetNamespace();
-                pSvcTarget->unsetRxbytes();
-                pSvcTarget->unsetRxpackets();
-                pSvcTarget->unsetTxbytes();
-                pSvcTarget->unsetTxpackets();
-            }
->>>>>>> origin/master
 #ifdef HAVE_PROMETHEUS_SUPPORT
             // If the flows dont exist, reset the counts back to 0
             // also remove the extra pod specific label annotations
             auto nhip = pSvcTarget->getIp();
-<<<<<<< HEAD
             if (nhip)
                 prometheusManager.addNUpdateSvcTargetCounter(uuid,
-=======
-            if (nhip) {
-                if (isNodePort) {
-                    prometheusManager.addNUpdateSvcTargetCounter("nodeport-"+uuid,
->>>>>>> origin/master
                                                              nhip.get(),
                                                              0, 0, 0, 0,
                                                              svcAttr,
                                                              attr_map(),
-<<<<<<< HEAD
                                                              true);
 #endif
         }
@@ -2896,43 +2532,6 @@ void IntFlowManager::clearSvcStatsCounters (const std::string& uuid,
         prometheusManager.addNUpdateSvcCounter(uuid,
                                                0, 0, 0, 0,
                                                attr_map());
-=======
-                                                             false, true, true);
-                } else {
-                    prometheusManager.addNUpdateSvcTargetCounter(uuid,
-                                                             nhip.get(),
-                                                             0, 0, 0, 0,
-                                                             svcAttr,
-                                                             attr_map(),
-                                                             false, true);
-                }
-            }
-#endif
-        }
-        if (isNodePort) {
-            opSvc.get()->unsetNodePortRxbytes();
-            opSvc.get()->unsetNodePortRxpackets();
-            opSvc.get()->unsetNodePortTxbytes();
-            opSvc.get()->unsetNodePortTxpackets();
-        } else {
-            opSvc.get()->unsetRxbytes();
-            opSvc.get()->unsetRxpackets();
-            opSvc.get()->unsetTxbytes();
-            opSvc.get()->unsetTxpackets();
-        }
-#ifdef HAVE_PROMETHEUS_SUPPORT
-        // If svc becomes external or anycast or if all the NH's dont
-        // exist or create flows, then reset the counters back to 0
-        if (isNodePort) {
-            prometheusManager.addNUpdateSvcCounter("nodeport-"+uuid,
-                                               0, 0, 0, 0,
-                                               attr_map(), true);
-        } else {
-            prometheusManager.addNUpdateSvcCounter(uuid,
-                                               0, 0, 0, 0,
-                                               attr_map());
-        }
->>>>>>> origin/master
 #endif
     }
     mutator.commit();
@@ -2953,523 +2552,16 @@ void IntFlowManager::updateSvcStatsFlows (const string& uuid,
     if (serviceStatsFlowDisabled)
         return;
 
-<<<<<<< HEAD
-=======
-    LOG(DEBUG) << "##### Updating service stats flows:"
-               << " uuid: " << uuid
-               << " is_svc: " << is_svc
-               << " is_add: " << is_add << "#######";
-
->>>>>>> origin/master
     updatePodSvcStatsFlows(uuid, is_svc, is_add);
     updateSvcTgtStatsFlows(uuid, is_svc, is_add);
-    updateSvcNodeStatsFlows(uuid, is_svc, is_add);
-    updateSvcExtStatsFlows(uuid, is_svc, is_add);
-}
-
-void IntFlowManager::updateSvcExtStatsFlows (const string &uuid,
-                                             const bool& is_svc,
-                                             const bool &is_add)
-{
-
-    LOG(TRACE) << "##### Updating ext<-->svc-tgt flows:"
-               << " uuid: " << uuid
-               << " is_svc: " << is_svc
-               << " is_add: " << is_add << "#######";
-
-    /* Create/Delete cookies per service-mapping of a service.
-     * Each of these "ext<-->svc-tgt" are tracked together under
-     * their respective "svc" uuids.
-     * i.e. All of these flows are clubbed together with "svc-ext:svc-uuid". */
-    unordered_set<string> uuid_ck_set;
-
-    // Expr to del stats flow between "ext to svc" and "svc to ext"
-    auto svcTgtCkRemExpr =
-        [this] (const string &flow_uuid,
-                const string &svc_uuid) -> void {
-        // Idgen would have restored the ids during agent restart. If flows for this
-        // service needs to be removed, then free up the restored IDs as well.
-        ServiceManager& srvMgr = agent.getServiceManager();
-        shared_ptr<const Service> asWrapper = srvMgr.getService(svc_uuid);
-        if (asWrapper) {
-            const Service& as = *asWrapper;
-            for (auto const& sm : as.getServiceMappings()) {
-                for (const string& nhip : sm.getNextHopIPs()) {
-                    idGen.erase(ID_NMSPC_SVCSTATS, "extosvc:"+flow_uuid+":"+nhip);
-                    idGen.erase(ID_NMSPC_SVCSTATS, "svctoex:"+flow_uuid+":"+nhip);
-                    if (svc_nh_map.find(flow_uuid) != svc_nh_map.end())
-                        svc_nh_map[flow_uuid].erase(nhip);
-                }
-            }
-            clearSvcStatsCounters(svc_uuid, as.getAttributes(), true);
-        } else {
-            // Note: the only time asWrapper will be null is when service is
-            // removed. In such a case, the observer mo and prom metrics
-            // would have been deleted from ServiceManager already. The below
-            // call will be a no-op.
-            clearSvcStatsCounters(svc_uuid, attr_map(), true);
-        }
-
-        // Above should have freed up all the ids. But during svc delete, asWrapper will be
-        // null. Use svc_nh_map to free up in that case.
-        if (svc_nh_map.find(flow_uuid) != svc_nh_map.end()) {
-            for (const string& nhip : svc_nh_map[flow_uuid]) {
-                idGen.erase(ID_NMSPC_SVCSTATS, "extosvc:"+flow_uuid+":"+nhip);
-                idGen.erase(ID_NMSPC_SVCSTATS, "svctoex:"+flow_uuid+":"+nhip);
-            }
-        }
-        svc_nh_map[flow_uuid].clear();
-        svc_nh_map.erase(flow_uuid);
-    };
-
-    // build this set to detect if any svc-tgt state needs to be removed
-    // after an update of svc or ep/nh
-    unordered_set<string> nhips;
-
-    // Expr to add stats cookies between "ext to svc" and "svc to ext"
-    // note: as of now flows arent created in stats table for on-prem
-    // service pod stats. if at all we need to create flows in future
-    // then flow_uuid will be used during write_flow()
-    auto svcTgtCkAddExpr =
-        [this, &uuid_ck_set, &nhips](const string &flow_uuid,
-                                     const string &svc_uuid,
-                                     const string &nhipStr,
-                                     const Service::ServiceMapping &sm,
-                                     const Service& as,
-                                     const attr_map &svcAttr,
-                                     const attr_map &epAttr) -> void {
-
-        boost::system::error_code ec;
-        address::from_string(nhipStr, ec);
-        if (ec) {
-            LOG(WARNING) << "Invalid nexthop IP: "
-                         << nhipStr << ": " << ec.message();
-            return;
-        }
-
-        const optional<string>& ofPortName = as.getInterfaceName();
-        if (!ofPortName) {
-            LOG(DEBUG) << "ofPort not valid for svc: " << svc_uuid;
-            return;
-        }
-
-        if (!as.getIfaceVlan()) {
-            LOG(DEBUG) << "vlan not valid for svc: " << svc_uuid;
-            return;
-        }
-
-        // check if service IP is valid for safety
-        if (!sm.getServiceIP())
-            return;
-        address::from_string(sm.getServiceIP().get(), ec);
-        if (ec) {
-            LOG(WARNING) << "Invalid service IP: "
-                         << sm.getServiceIP().get()
-                         << ": " << ec.message();
-            return;
-        }
-
-        const string& ingStr = "extosvc:"+flow_uuid+":"+nhipStr;
-        const string& egrStr = "svctoex:"+flow_uuid+":"+nhipStr;
-        uint64_t cookieIdIg = (uint64_t)idGen.getId(ID_NMSPC_SVCSTATS, ingStr);
-        uint64_t cookieIdEg = (uint64_t)idGen.getId(ID_NMSPC_SVCSTATS, egrStr);
-        if ((svc_nh_map.find(flow_uuid) == svc_nh_map.end())
-            || ((svc_nh_map.find(flow_uuid) != svc_nh_map.end())
-                && (svc_nh_map[flow_uuid].find(nhipStr) == svc_nh_map[flow_uuid].end()))) {
-            LOG(DEBUG) << "Created ext<-->svc-tgt cookies for"
-                       << " flow_uuid: " << flow_uuid
-                       << " NH IP: " << nhipStr
-                       << " SVC-SM IP: " << sm.getServiceIP().get()
-                       << " cookieIg: " << cookieIdIg
-                       << " cookieEg: " << cookieIdEg;
-        }
-
-        svc_nh_map[flow_uuid].insert(nhipStr);
-        nhips.insert(nhipStr);
-
-        // updates to take care of pod name and namespace change
-        updateSvcTgtStatsCounters(cookieIdIg, true, ingStr, 0, 0, svcAttr, epAttr);
-        updateSvcTgtStatsCounters(cookieIdEg, false, egrStr, 0, 0, svcAttr, epAttr);
-
-        uuid_ck_set.insert(flow_uuid);
-    };
-
-    if (is_svc) {
-        const string& flow_uuid = "svc-ext:"+uuid;
-        if (!is_add) {
-            svcTgtCkRemExpr(flow_uuid, uuid);
-            return;
-        }
-
-        ServiceManager& srvMgr = agent.getServiceManager();
-        shared_ptr<const Service> asWrapper = srvMgr.getService(uuid);
-
-        if (!asWrapper || !asWrapper->getDomainURI()) {
-            LOG(DEBUG) << "unable to get service from uuid";
-            return;
-        }
-
-        const Service& as = *asWrapper;
-        if ((as.getServiceMode() != Service::LOADBALANCER)
-                                  || !as.isExternal()) {
-            LOG(TRACE) << "ext<-->svc-tgt not handled for non-LB or non-ext services - svc_uuid: " << uuid;
-            // clear obs and prom metrics during update;
-            // below will be no-op during create
-            svcTgtCkRemExpr(flow_uuid, uuid);
-            return;
-        }
-
-        for (auto const& sm : as.getServiceMappings()) {
-            for (const string& nhipstr : sm.getNextHopIPs()) {
-                const ip_ep_map_t& ip_ep_map = agent.getEndpointManager().getIPLocalEpMap();
-                const auto& itr = ip_ep_map.find(nhipstr);
-                if (itr != ip_ep_map.end()) {
-                    svcTgtCkAddExpr(flow_uuid,
-                                    uuid,
-                                    nhipstr, sm, as,
-                                    as.getAttributes(),
-                                    itr->second->getAttributes());
-                }
-            }
-        }
-
-        // flush svc-tgt counters and idgen cookies of NH's that got
-        // removed due to config updates of svc or ep/nh
-        if (!uuid_ck_set.size()) {
-            LOG(TRACE) << "#### ext<-->svc-tgt no cookies created for svc_uuid: " << uuid;
-            // clear obs and prom metrics during update;
-            // below will be no-op during create
-            svcTgtCkRemExpr(flow_uuid, uuid);
-        } else if (svc_nh_map.find(flow_uuid) != svc_nh_map.end()) {
-            auto nh_itr = svc_nh_map[flow_uuid].begin();
-            while (nh_itr != svc_nh_map[flow_uuid].end()) {
-                if (nhips.find(*nh_itr) == nhips.end()) {
-                    LOG(DEBUG) << "#### ext<-->svc-tgt: deleting"
-                               << " svc_uuid: " << uuid
-                               << " nh_ip: " << *nh_itr;
-                    idGen.erase(ID_NMSPC_SVCSTATS, "extosvc:"+flow_uuid+":"+*nh_itr);
-                    idGen.erase(ID_NMSPC_SVCSTATS, "svctoex:"+flow_uuid+":"+*nh_itr);
-                    clearSvcTgtStatsCounters(uuid, *nh_itr, as.getAttributes(), true);
-                    nh_itr = svc_nh_map[flow_uuid].erase(nh_itr);
-                } else {
-                    nh_itr++;
-                }
-            }
-            nhips.clear();
-        }
-    } else {
-        unordered_set<string> svcUuids;
-        ServiceManager& svcMgr = agent.getServiceManager();
-        svcMgr.getServiceUUIDs(svcUuids);
-
-        // check if this ep is servicemapping.nhIP. If so, the idgen cookies
-        // for this svc-tgt will get updated
-        // If the EP became external, then cookie need to be removed
-        // If the EP became local, then cookie need to be added
-        // If new IP is added, then cookie will be added
-        // If an IP is modified, then cookie will be added/deleted
-        // If an IP is deleted, then cookie will be deleted
-        for (const string& svcUuid : svcUuids) {
-            updateSvcExtStatsFlows(svcUuid, true, true);
-            // If EP IP is modified:
-            //  - if it became NH of this service, then SNAT/DNAT flows should be
-            //    updated with stats cookie
-            //  - if it moved away from being NH of this service, then SNAT/DNAT
-            //    flows shouldnt match on stats cookie
-            programServiceSnatDnatFlows(svcUuid);
-        }
-    }
-}
-
-// NodePort stats flows for a service
-void IntFlowManager::updateSvcNodeStatsFlows (const string &uuid,
-                                              const bool &is_svc,
-                                              const bool &is_add)
-{
-    LOG(TRACE) << "##### Updating node<-->svc-tgt flows:"
-               << " uuid: " << uuid
-               << " is_svc: " << is_svc
-               << " is_add: " << is_add << "#######";
-
-    /* A service could have multiple ServiceMappings and that could
-     * have multiple next hop pod IPs. Check if these next hops are
-     * local to the node, and then create flows for these.
-     * Each of these "node<-->svc-tgt" are tracked together under
-     * their respective "svc" uuids.
-     * i.e. All the svc-tgt flows are clubbed together with "svc-nod:svc-uuid".
-     * In case there is any delta in flows due to EP delete or EP being external
-     * or next-hop delete or update, the diff of flows will take effect
-     * in TableState.apply() */
-    unordered_map<string, FlowEntryList> uuid_felist_map;
-
-    // Expr to del stats flow between "node to svc" and "svc to node"
-    auto svcNodeFlowRemExpr =
-        [this] (const string &flow_uuid,
-                const string &svc_uuid) -> void {
-        switchManager.clearFlows(flow_uuid, STATS_TABLE_ID);
-
-        // Idgen would have restored the ids during agent restart. clean up the
-        // cookies instead of waiting for these to be garbage collected.
-        ServiceManager& srvMgr = agent.getServiceManager();
-        shared_ptr<const Service> asWrapper = srvMgr.getService(svc_uuid);
-        if (asWrapper) {
-            const Service& as = *asWrapper;
-            for (auto const& sm : as.getServiceMappings()) {
-                for (const string& nhip : sm.getNextHopIPs()) {
-                    idGen.erase(ID_NMSPC_SVCSTATS, "notosvc:"+flow_uuid+":"+nhip);
-                    idGen.erase(ID_NMSPC_SVCSTATS, "svctono:"+flow_uuid+":"+nhip);
-                    if (svc_nh_map.find(flow_uuid) != svc_nh_map.end())
-                        svc_nh_map[flow_uuid].erase(nhip);
-                }
-            }
-            clearSvcStatsCounters(svc_uuid, as.getAttributes(), false, true);
-        } else {
-            // Note: the only time asWrapper will be null is when service is
-            // removed. In such a case, the observer mo and prom metrics
-            // would have been deleted from ServiceManager already. The below
-            // call will be a no-op.
-            clearSvcStatsCounters(svc_uuid, attr_map(), false, true);
-        }
-
-        // Above should have freed up all the ids. But during svc delete, asWrapper will be
-        // null. Use svc_nh_map to free up in that case.
-        if (svc_nh_map.find(flow_uuid) != svc_nh_map.end()) {
-            for (const string& nhip : svc_nh_map[flow_uuid]) {
-                idGen.erase(ID_NMSPC_SVCSTATS, "notosvc:"+flow_uuid+":"+nhip);
-                idGen.erase(ID_NMSPC_SVCSTATS, "svctono:"+flow_uuid+":"+nhip);
-            }
-        }
-        svc_nh_map[flow_uuid].clear();
-        svc_nh_map.erase(flow_uuid);
-    };
-
-    // build this set to detect if any svc-tgt state needs to be removed
-    // after an update of svc or ep/nh
-    unordered_set<string> nhips;
-
-    // Expr to add stats flow between "any to svc" and "svc to any"
-    auto svcNodeFlowAddExpr =
-        [this, &uuid_felist_map, &nhips](const string &flow_uuid,
-                                         const string &svc_uuid,
-                                         const string &nhipStr,
-                                         const Service::ServiceMapping &sm,
-                                         const attr_map &svcAttr,
-                                         const attr_map &epAttr) -> void {
-
-        if (!sm.getNodePort()) {
-            LOG(TRACE) << "nodeport not valid for svc uuid: " << svc_uuid;
-            return;
-        }
-
-        boost::system::error_code ec;
-        address nhAddr = address::from_string(nhipStr, ec);
-        if (ec) {
-            LOG(WARNING) << "Invalid nexthop IP: "
-                         << nhipStr << ": " << ec.message();
-            return;
-        }
-
-        // check if service IP is valid for safety
-        if (!sm.getServiceIP())
-            return;
-        address::from_string(sm.getServiceIP().get(), ec);
-        if (ec) {
-            LOG(WARNING) << "Invalid service IP: "
-                         << sm.getServiceIP().get()
-                         << ": " << ec.message();
-            return;
-        }
-
-        uint8_t proto = 0;
-        if (sm.getServiceProto()) {
-            const string& protoStr = sm.getServiceProto().get();
-            if ("udp" == protoStr)
-                proto = 17;
-            else if ("tcp" == protoStr)
-                proto = 6;
-            else {
-                LOG(DEBUG) << "unhandled proto: " << protoStr
-                           << " in any<-->svc flow for"
-                           << " NH IP: " << nhipStr
-                           << " SVC-SM IP: " << sm.getServiceIP().get();
-                return;
-            }
-        }
-
-        unordered_set<std::string> eps;
-        agent.getEndpointManager().getEndpointsByAccessIface("veth_host_ac", eps);
-        for (const std::string& ep : eps) {
-            shared_ptr<const Endpoint> epWrapper = agent.getEndpointManager().getEndpoint(ep);
-            if (!epWrapper)
-                break;
-            const Endpoint& endPoint = *epWrapper.get();
-            for (const string& epipStr : endPoint.getIPs()) {
-                network::cidr_t cidr;
-                if (!network::cidr_from_string(epipStr, cidr, true)) {
-                    LOG(WARNING) << "Invalid endpoint IP: "
-                                 << epipStr << ": " << ec.message();
-                    continue;
-                }
-
-                // ensure flows are either v4 or v6 - no mix-n-match
-                if (nhAddr.is_v4() != cidr.first.is_v4()) {
-                    LOG(TRACE) << "Not adding flow - ip types are different";
-                    continue;
-                }
-
-                const string& ingStr = "notosvc:"+flow_uuid+":"+nhipStr;
-                const string& egrStr = "svctono:"+flow_uuid+":"+nhipStr;
-                uint64_t cookieIdIg = (uint64_t)idGen.getId(ID_NMSPC_SVCSTATS, ingStr);
-                uint64_t cookieIdEg = (uint64_t)idGen.getId(ID_NMSPC_SVCSTATS, egrStr);
-                if ((svc_nh_map.find(flow_uuid) == svc_nh_map.end())
-                    || ((svc_nh_map.find(flow_uuid) != svc_nh_map.end())
-                        && (svc_nh_map[flow_uuid].find(nhipStr) == svc_nh_map[flow_uuid].end()))) {
-                    LOG(DEBUG) << "Creating node<-->svc flows for"
-                               << " flow_uuid: " << flow_uuid
-                               << " vethhost_ac IP: " << epipStr
-                               << " NH IP: " << nhipStr
-                               << " SVC-SM IP: " << sm.getServiceIP().get()
-                               << " cookieIg: " << cookieIdIg
-                               << " cookieEg: " << cookieIdEg;
-                }
-
-                svc_nh_map[flow_uuid].insert(nhipStr);
-                nhips.insert(nhipStr);
-
-                // updates to take care of pod name and namespace change
-                updateSvcTgtStatsCounters(cookieIdIg, true, ingStr, 0, 0, svcAttr, epAttr);
-                updateSvcTgtStatsCounters(cookieIdEg, false, egrStr, 0, 0, svcAttr, epAttr);
-
-                FlowBuilder nodeToSvc; // nodeip to service stats
-                FlowBuilder svcToNode; // from service to nodeip stats
-
-                matchServiceProto(nodeToSvc, proto, sm, true);
-                matchActionServiceProto(svcToNode, proto, sm, false, false);
-
-                if (nhAddr.is_v4()) {
-                    nodeToSvc.priority(98).ethType(eth::type::IP)
-                            .ipSrc(cidr.first, cidr.second)
-                            .ipDst(nhAddr)
-                            .flags(OFPUTIL_FF_SEND_FLOW_REM)
-                            .cookie(ovs_htonll(cookieIdIg))
-                            .action().go(OUT_TABLE_ID);
-                    svcToNode.priority(98).ethType(eth::type::IP)
-                            .ipSrc(nhAddr)
-                            .ipDst(cidr.first, cidr.second)
-                            .flags(OFPUTIL_FF_SEND_FLOW_REM)
-                            .cookie(ovs_htonll(cookieIdEg))
-                            .action().go(OUT_TABLE_ID);
-                } else {
-                    nodeToSvc.priority(98).ethType(eth::type::IPV6)
-                            .ipSrc(cidr.first, cidr.second)
-                            .ipDst(nhAddr)
-                            .flags(OFPUTIL_FF_SEND_FLOW_REM)
-                            .cookie(ovs_htonll(cookieIdIg))
-                            .action().go(OUT_TABLE_ID);
-                    svcToNode.priority(98).ethType(eth::type::IPV6)
-                            .ipSrc(nhAddr)
-                            .ipDst(cidr.first, cidr.second)
-                            .flags(OFPUTIL_FF_SEND_FLOW_REM)
-                            .cookie(ovs_htonll(cookieIdEg))
-                            .action().go(OUT_TABLE_ID);
-                }
-                nodeToSvc.build(uuid_felist_map[flow_uuid]);
-                svcToNode.build(uuid_felist_map[flow_uuid]);
-            }
-        }
-    };
-
-    if (is_svc) {
-        const string& flow_uuid = "svc-nod:"+uuid;
-        if (!is_add) {
-            svcNodeFlowRemExpr(flow_uuid, uuid);
-            return;
-        }
-
-        ServiceManager& srvMgr = agent.getServiceManager();
-        shared_ptr<const Service> asWrapper = srvMgr.getService(uuid);
-
-        if (!asWrapper || !asWrapper->getDomainURI()) {
-            LOG(DEBUG) << "unable to get service from uuid";
-            return;
-        }
-
-        const Service& as = *asWrapper;
-        LOG(TRACE) << "####### node<-->svc-tgt Service ########";
-        LOG(TRACE) << *asWrapper;
-
-        if ((as.getServiceMode() != Service::LOADBALANCER)
-                                  || as.isExternal()) {
-            LOG(TRACE) << "node<-->svc-tgt not handled for non-LB or ext services";
-            // clear obs and prom metrics during update;
-            // below will be no-op during create
-            svcNodeFlowRemExpr(flow_uuid, uuid);
-            return;
-        }
-
-        for (auto const& sm : as.getServiceMappings()) {
-            for (const string& nhipstr : sm.getNextHopIPs()) {
-                const ip_ep_map_t& ip_ep_map = agent.getEndpointManager().getIPLocalEpMap();
-                const auto& itr = ip_ep_map.find(nhipstr);
-                if (itr != ip_ep_map.end()) {
-                    svcNodeFlowAddExpr(flow_uuid,
-                                       uuid,
-                                       nhipstr, sm,
-                                       as.getAttributes(),
-                                       itr->second->getAttributes());
-                }
-            }
-        }
-
-        // flush svc-tgt counters and idgen cookies of NH flows that got
-        // removed due to config updates of svc or ep/nh
-        if (!uuid_felist_map.size()) {
-            LOG(TRACE) << "#### node<-->svc-tgt no flows created for svc_uuid: " << uuid;
-            // clear obs and prom metrics during update;
-            // below will be no-op during create
-            svcNodeFlowRemExpr(flow_uuid, uuid);
-        } else if (svc_nh_map.find(flow_uuid) != svc_nh_map.end()) {
-            auto nh_itr = svc_nh_map[flow_uuid].begin();
-            while (nh_itr != svc_nh_map[flow_uuid].end()) {
-                if (nhips.find(*nh_itr) == nhips.end()) {
-                    LOG(DEBUG) << "#### node<-->svc-tgt: deleting"
-                               << " svc_uuid: " << uuid
-                               << " nh_ip: " << *nh_itr;
-                    idGen.erase(ID_NMSPC_SVCSTATS, "notosvc:"+flow_uuid+":"+*nh_itr);
-                    idGen.erase(ID_NMSPC_SVCSTATS, "svctono:"+flow_uuid+":"+*nh_itr);
-                    clearSvcTgtStatsCounters(uuid, *nh_itr, as.getAttributes(), false, true);
-                    nh_itr = svc_nh_map[flow_uuid].erase(nh_itr);
-                } else {
-                    nh_itr++;
-                }
-            }
-            nhips.clear();
-        }
-    } else {
-        unordered_set<string> svcUuids;
-        ServiceManager& svcMgr = agent.getServiceManager();
-        svcMgr.getServiceUUIDs(svcUuids);
-
-        // check if this ep is servicemapping.nhIP. If so, the flows
-        // for this svc-tgt will get updated
-        // If the EP became external, then stats flows need to be removed
-        // If the EP became local, then stats flows need to be added
-        // If new IP is added, then stats flows will be added
-        // If an IP is deleted, then stats flows will be deleted
-        for (const string& svcUuid : svcUuids) {
-            updateSvcNodeStatsFlows(svcUuid, true, true);
-        }
-    }
-
-    for (auto &p : uuid_felist_map)
-        switchManager.writeFlow(p.first, STATS_TABLE_ID, p.second);
 }
 
 void IntFlowManager::updateSvcTgtStatsFlows (const string &uuid,
                                              const bool &is_svc,
                                              const bool &is_add)
 {
-    LOG(TRACE) << "##### Updating *<-->svc-tgt flows:"
+
+    LOG(DEBUG) << "##### Updating *<-->svc-tgt flows:"
                << " uuid: " << uuid
                << " is_svc: " << is_svc
                << " is_add: " << is_add << "#######";
@@ -3501,51 +2593,29 @@ void IntFlowManager::updateSvcTgtStatsFlows (const string &uuid,
                 for (const string& nhip : sm.getNextHopIPs()) {
                     idGen.erase(ID_NMSPC_SVCSTATS, "antosvc:"+flow_uuid+":"+nhip);
                     idGen.erase(ID_NMSPC_SVCSTATS, "svctoan:"+flow_uuid+":"+nhip);
-<<<<<<< HEAD
                     if (svc_nh_map.find(svc_uuid) != svc_nh_map.end())
                         svc_nh_map[svc_uuid].erase(nhip);
                 }
             }
             clearSvcStatsCounters(svc_uuid, as.getAttributes());
-=======
-                    if (svc_nh_map.find(flow_uuid) != svc_nh_map.end())
-                        svc_nh_map[flow_uuid].erase(nhip);
-                }
-            }
-            clearSvcStatsCounters(svc_uuid, as.getAttributes(), false);
->>>>>>> origin/master
         } else {
             // Note: the only time asWrapper will be null is when service is
             // removed. In such a case, the observer mo and prom metrics
             // would have been deleted from ServiceManager already. The below
             // call will be a no-op.
-<<<<<<< HEAD
             clearSvcStatsCounters(svc_uuid, attr_map());
-=======
-            clearSvcStatsCounters(svc_uuid, attr_map(), false);
->>>>>>> origin/master
         }
 
         // Above should have freed up all the ids. But during svc delete, asWrapper will be
         // null. Use svc_nh_map to free up in that case.
-<<<<<<< HEAD
         if (svc_nh_map.find(svc_uuid) != svc_nh_map.end()) {
             for (const string& nhip : svc_nh_map[svc_uuid]) {
-=======
-        if (svc_nh_map.find(flow_uuid) != svc_nh_map.end()) {
-            for (const string& nhip : svc_nh_map[flow_uuid]) {
->>>>>>> origin/master
                 idGen.erase(ID_NMSPC_SVCSTATS, "antosvc:"+flow_uuid+":"+nhip);
                 idGen.erase(ID_NMSPC_SVCSTATS, "svctoan:"+flow_uuid+":"+nhip);
             }
         }
-<<<<<<< HEAD
         svc_nh_map[svc_uuid].clear();
         svc_nh_map.erase(svc_uuid);
-=======
-        svc_nh_map[flow_uuid].clear();
-        svc_nh_map.erase(flow_uuid);
->>>>>>> origin/master
     };
 
     // build this set to detect if any svc-tgt state needs to be removed
@@ -3579,6 +2649,9 @@ void IntFlowManager::updateSvcTgtStatsFlows (const string &uuid,
                          << ": " << ec.message();
             return;
         }
+        LOG(DEBUG) << "Adding any<-->svc flow for"
+                   << " NH IP: " << nhipStr
+                   << " SVC-SM IP: " << sm.getServiceIP().get();
 
         uint8_t proto = 0;
         if (sm.getServiceProto()) {
@@ -3588,10 +2661,7 @@ void IntFlowManager::updateSvcTgtStatsFlows (const string &uuid,
             else if ("tcp" == protoStr)
                 proto = 6;
             else {
-                LOG(DEBUG) << "unhandled proto: " << protoStr
-                           << " in any<-->svc flow for"
-                           << " NH IP: " << nhipStr
-                           << " SVC-SM IP: " << sm.getServiceIP().get();
+                LOG(DEBUG) << "unhandled proto: " << protoStr;
                 return;
             }
         }
@@ -3600,19 +2670,13 @@ void IntFlowManager::updateSvcTgtStatsFlows (const string &uuid,
         const string& egrStr = "svctoan:"+flow_uuid+":"+nhipStr;
         uint64_t cookieIdIg = (uint64_t)idGen.getId(ID_NMSPC_SVCSTATS, ingStr);
         uint64_t cookieIdEg = (uint64_t)idGen.getId(ID_NMSPC_SVCSTATS, egrStr);
-        if ((svc_nh_map.find(flow_uuid) == svc_nh_map.end())
-            || ((svc_nh_map.find(flow_uuid) != svc_nh_map.end())
-                && (svc_nh_map[flow_uuid].find(nhipStr) == svc_nh_map[flow_uuid].end()))) {
-            LOG(DEBUG) << "Creating any<-->svc flows for"
-                       << " flow_uuid: " << flow_uuid
-                       << " NH IP: " << nhipStr
-                       << " SVC-SM IP: " << sm.getServiceIP().get()
-                       << " cookieIg: " << cookieIdIg
-                       << " cookieEg: " << cookieIdEg;
-        }
-
-        svc_nh_map[flow_uuid].insert(nhipStr);
+        svc_nh_map[svc_uuid].insert(nhipStr);
         nhips.insert(nhipStr);
+
+        LOG(DEBUG) << "Creating any<-->svc counters for"
+                   << " flow_uuid: " << flow_uuid
+                   << " cookieIg: " << cookieIdIg
+                   << " cookieEg: " << cookieIdEg;
 
         // updates to take care of pod name and namespace change
         updateSvcTgtStatsCounters(cookieIdIg, true, ingStr, 0, 0, svcAttr, epAttr);
@@ -3627,26 +2691,22 @@ void IntFlowManager::updateSvcTgtStatsFlows (const string &uuid,
         if (nhAddr.is_v4()) {
             anyToSvc.priority(97).ethType(eth::type::IP)
                     .ipDst(nhAddr)
-                    .reg(12, 0, 1<<31)
                     .flags(OFPUTIL_FF_SEND_FLOW_REM)
                     .cookie(ovs_htonll(cookieIdIg))
                     .action().go(OUT_TABLE_ID);
             svcToAny.priority(97).ethType(eth::type::IP)
                     .ipSrc(nhAddr)
-                    .reg(12, 0, 1<<31)
                     .flags(OFPUTIL_FF_SEND_FLOW_REM)
                     .cookie(ovs_htonll(cookieIdEg))
                     .action().go(OUT_TABLE_ID);
         } else {
             anyToSvc.priority(97).ethType(eth::type::IPV6)
                     .ipDst(nhAddr)
-                    .reg(12, 0, 1<<31)
                     .flags(OFPUTIL_FF_SEND_FLOW_REM)
                     .cookie(ovs_htonll(cookieIdIg))
                     .action().go(OUT_TABLE_ID);
             svcToAny.priority(97).ethType(eth::type::IPV6)
                     .ipSrc(nhAddr)
-                    .reg(12, 0, 1<<31)
                     .flags(OFPUTIL_FF_SEND_FLOW_REM)
                     .cookie(ovs_htonll(cookieIdEg))
                     .action().go(OUT_TABLE_ID);
@@ -3656,9 +2716,8 @@ void IntFlowManager::updateSvcTgtStatsFlows (const string &uuid,
     };
 
     if (is_svc) {
-        const string& flow_uuid = "svc-tgt:"+uuid;
         if (!is_add) {
-            svcTgtFlowRemExpr(flow_uuid, uuid);
+            svcTgtFlowRemExpr("svc-tgt:"+uuid, uuid);
             return;
         }
 
@@ -3671,15 +2730,15 @@ void IntFlowManager::updateSvcTgtStatsFlows (const string &uuid,
         }
 
         const Service& as = *asWrapper;
-        LOG(TRACE) << "####### *<-->svc-tgt Service ########";
-        LOG(TRACE) << *asWrapper;
+        LOG(DEBUG) << "####### *<-->svc-tgt Service ########";
+        LOG(DEBUG) << *asWrapper;
 
         if ((as.getServiceMode() != Service::LOADBALANCER)
                                   || as.isExternal()) {
-            LOG(TRACE) << "*<-->svc-tgt not handled for non-LB or ext services";
+            LOG(DEBUG) << "*<-->svc-tgt not handled for non-LB or ext services";
             // clear obs and prom metrics during update;
             // below will be no-op during create
-            svcTgtFlowRemExpr(flow_uuid, uuid);
+            svcTgtFlowRemExpr("svc-tgt:"+uuid, uuid);
             return;
         }
 
@@ -3688,7 +2747,7 @@ void IntFlowManager::updateSvcTgtStatsFlows (const string &uuid,
                 const ip_ep_map_t& ip_ep_map = agent.getEndpointManager().getIPLocalEpMap();
                 const auto& itr = ip_ep_map.find(nhipstr);
                 if (itr != ip_ep_map.end()) {
-                    svcTgtFlowAddExpr(flow_uuid,
+                    svcTgtFlowAddExpr("svc-tgt:"+uuid,
                                       uuid,
                                       nhipstr, sm,
                                       as.getAttributes(),
@@ -3700,28 +2759,21 @@ void IntFlowManager::updateSvcTgtStatsFlows (const string &uuid,
         // flush svc-tgt counters and idgen cookies of NH flows that got
         // removed due to config updates of svc or ep/nh
         if (!uuid_felist_map.size()) {
-            LOG(TRACE) << "####*<-->svc-tgt no flows created for svc_uuid: " << uuid;
+            LOG(DEBUG) << "####*<-->svc-tgt no flows created for svc_uuid: " << uuid;
             // clear obs and prom metrics during update;
             // below will be no-op during create
-            svcTgtFlowRemExpr(flow_uuid, uuid);
-        } else if (svc_nh_map.find(flow_uuid) != svc_nh_map.end()) {
-            auto nh_itr = svc_nh_map[flow_uuid].begin();
-            while (nh_itr != svc_nh_map[flow_uuid].end()) {
+            svcTgtFlowRemExpr("svc-tgt:"+uuid, uuid);
+        } else if (svc_nh_map.find(uuid) != svc_nh_map.end()) {
+            auto nh_itr = svc_nh_map[uuid].begin();
+            while (nh_itr != svc_nh_map[uuid].end()) {
                 if (nhips.find(*nh_itr) == nhips.end()) {
                     LOG(DEBUG) << "#### *<-->svc-tgt: deleting"
                                << " svc_uuid: " << uuid
                                << " nh_ip: " << *nh_itr;
-<<<<<<< HEAD
                     idGen.erase(ID_NMSPC_SVCSTATS, "antosvc:svc-tgt:"+uuid+":"+*nh_itr);
                     idGen.erase(ID_NMSPC_SVCSTATS, "svctoan:svc-tgt:"+uuid+":"+*nh_itr);
                     clearSvcTgtStatsCounters(uuid, *nh_itr, as.getAttributes());
                     nh_itr = svc_nh_map[uuid].erase(nh_itr);
-=======
-                    idGen.erase(ID_NMSPC_SVCSTATS, "antosvc:"+flow_uuid+":"+*nh_itr);
-                    idGen.erase(ID_NMSPC_SVCSTATS, "svctoan:"+flow_uuid+":"+*nh_itr);
-                    clearSvcTgtStatsCounters(uuid, *nh_itr, as.getAttributes(), false);
-                    nh_itr = svc_nh_map[flow_uuid].erase(nh_itr);
->>>>>>> origin/master
                 } else {
                     nh_itr++;
                 }
@@ -3758,7 +2810,7 @@ void IntFlowManager::updatePodSvcStatsFlows (const string &uuid,
                                              const bool &is_svc,
                                              const bool &is_add)
 {
-    LOG(TRACE) << "##### Updating pod<-->svc flows:"
+    LOG(DEBUG) << "##### Updating pod<-->svc flows:"
                << " uuid: " << uuid
                << " is_svc: " << is_svc
                << " is_add: " << is_add << "#######";
@@ -3787,7 +2839,9 @@ void IntFlowManager::updatePodSvcStatsFlows (const string &uuid,
     auto podSvcFlowAddExpr =
         [this, &uuid_felist_map](const string &uuid,
                                  const string &epipStr,
-                                 const Service::ServiceMapping &sm) -> void {
+                                 const Service::ServiceMapping &sm,
+                                 const attr_map &epAttr,
+                                 const attr_map &svcAttr) -> void {
 
         boost::system::error_code ec;
 
@@ -3808,13 +2862,13 @@ void IntFlowManager::updatePodSvcStatsFlows (const string &uuid,
                          << ": " << ec.message();
             return;
         }
-        LOG(TRACE) << "Adding pod<-->svc flow between"
+        LOG(DEBUG) << "Adding pod<-->svc flow between"
                    << " EP IP: " << epipStr
                    << " SVC-SM IP: " << sm.getServiceIP().get();
 
         // ensure flows are either v4 or v6 - no mix-n-match
         if (svcAddr.is_v4() != epAddr.is_v4()) {
-            LOG(TRACE) << "Not adding flow - ip types are different";
+            LOG(DEBUG) << "Not adding flow - ip types are different";
             return;
         }
 
@@ -3853,8 +2907,10 @@ void IntFlowManager::updatePodSvcStatsFlows (const string &uuid,
 
         // Note: the objects are created once. But we still call below counter
         // updates to take care of ep/svc attr changes
-        updatePodSvcStatsCounters(podSvcUuidCkMap[uuid].first, true, ingStr, 0, 0);
-        updatePodSvcStatsCounters(podSvcUuidCkMap[uuid].second, false, egrStr, 0, 0);
+        updatePodSvcStatsCounters(podSvcUuidCkMap[uuid].first, true, ingStr,
+                                  0, 0, epAttr, svcAttr);
+        updatePodSvcStatsCounters(podSvcUuidCkMap[uuid].second, false, egrStr,
+                                  0, 0, epAttr, svcAttr);
 
         FlowBuilder epToSvc; // to service stats
         FlowBuilder svcToEp; // from service stats
@@ -3916,8 +2972,8 @@ void IntFlowManager::updatePodSvcStatsFlows (const string &uuid,
         }
 
         const Service& as = *asWrapper;
-        LOG(TRACE) << "####### pod<-->svc Service ########";
-        LOG(TRACE) << *asWrapper;
+        LOG(DEBUG) << "####### pod<-->svc Service ########";
+        LOG(DEBUG) << *asWrapper;
 
         // build this set to detect if a pod<-->svc flow got created or not.
         // For e.g. if a svc-next hop becomes same as an IP in EP, then flow wont be created.
@@ -3926,22 +2982,17 @@ void IntFlowManager::updatePodSvcStatsFlows (const string &uuid,
         for (auto const& sm : as.getServiceMappings()) {
 
             for (const string& epUuid : epUuids) {
-                // Dont create pod<-->svc flows for veth_host_ac endpoint
-                if (epUuid.find("veth_host_ac") != std::string::npos) {
-                    continue;
-                }
-
                 shared_ptr<const Endpoint> epWrapper
                      = epMgr.getEndpoint(epUuid);
                 if (!epWrapper)
                     continue;
 
-                LOG(TRACE) << "####### pod<-->svc Endpoint ########";
-                LOG(TRACE) << *epWrapper;
+                LOG(DEBUG) << "####### pod<-->svc Endpoint ########";
+                LOG(DEBUG) << *epWrapper;
 
                 if ((as.getServiceMode() != Service::LOADBALANCER)
                                           || as.isExternal()) {
-                    LOG(TRACE) << "podsvc not handled for non-LB or ext services";
+                    LOG(DEBUG) << "podsvc not handled for non-LB or ext services";
                     // clear obs and prom metrics during update;
                     // below will be no-op during create
                     podSvcFlowRemExpr(epUuid+":"+uuid);
@@ -3950,12 +3001,11 @@ void IntFlowManager::updatePodSvcStatsFlows (const string &uuid,
 
                 const Endpoint& endPoint = *epWrapper.get();
                 if (endPoint.isExternal()) {
-                    LOG(TRACE) << "pod<-->svc flows not handled for external endpoints";
+                    LOG(DEBUG) << "pod<-->svc flows not handled for external endpoints";
                     continue;
                 }
 
                 for (const string& epipStr : endPoint.getIPs()) {
-<<<<<<< HEAD
                     // Dont create EPIP <--> SVCIP flows if EPIP is one of the
                     // next hops of this service.
                     const auto& nhips = sm.getNextHopIPs();
@@ -3964,16 +3014,6 @@ void IntFlowManager::updatePodSvcStatsFlows (const string &uuid,
                                           epipStr, sm,
                                           endPoint.getAttributes(),
                                           as.getAttributes());
-=======
-                    network::cidr_t cidr;
-                    if (!network::cidr_from_string(epipStr, cidr, false))
-                        continue;
-                    // Dont create EPIP <--> SVCIP flows if EPIP is one of the
-                    // next hops of this service.
-                    const auto& nhips = sm.getNextHopIPs();
-                    if (nhips.find(cidr.first.to_string()) == nhips.end()) {
-                        podSvcFlowAddExpr(epUuid+":"+uuid, cidr.first.to_string(), sm);
->>>>>>> origin/master
                     } else {
                         epsvc_uuids.insert(epUuid+":"+uuid);
                     }
@@ -3983,21 +3023,12 @@ void IntFlowManager::updatePodSvcStatsFlows (const string &uuid,
 
         for (const auto& epsvc_uuid: epsvc_uuids) {
             if (uuid_felist_map.find(epsvc_uuid) == uuid_felist_map.end()) {
-<<<<<<< HEAD
                 LOG(DEBUG) << "podsvc: no flows created for epsvc_uuid: " << epsvc_uuid;
-=======
-                LOG(TRACE) << "podsvc: no flows created for epsvc_uuid: " << epsvc_uuid;
->>>>>>> origin/master
                 podSvcFlowRemExpr(epsvc_uuid);
             }
         }
         epsvc_uuids.clear();
     } else {
-        // Dont create pod<-->svc flows for veth_host_ac endpoint
-        if (uuid.find("veth_host_ac") != std::string::npos) {
-            return;
-        }
-
         unordered_set<string> svcUuids;
         ServiceManager& svcMgr = agent.getServiceManager();
         svcMgr.getServiceUUIDs(svcUuids);
@@ -4017,12 +3048,12 @@ void IntFlowManager::updatePodSvcStatsFlows (const string &uuid,
             return;
         }
 
-        LOG(TRACE) << "####### pod<-->svc Endpoint ########";
-        LOG(TRACE) << *epWrapper;
+        LOG(DEBUG) << "####### pod<-->svc Endpoint ########";
+        LOG(DEBUG) << *epWrapper;
 
         const Endpoint& endPoint = *epWrapper.get();
         if (endPoint.isExternal()) {
-            LOG(TRACE) << "pod<-->svc flows not handled for external endpoints";
+            LOG(DEBUG) << "pod<-->svc flows not handled for external endpoints";
             return;
         }
 
@@ -4034,9 +3065,6 @@ void IntFlowManager::updatePodSvcStatsFlows (const string &uuid,
         // cleaned up.
         unordered_set<string> epsvc_uuids;
         for (const string& epipStr : endPoint.getIPs()) {
-             network::cidr_t cidr;
-             if (!network::cidr_from_string(epipStr, cidr, false))
-                 continue;
 
             for (const string& svcUuid : svcUuids) {
                 shared_ptr<const Service> asWrapper
@@ -4044,13 +3072,13 @@ void IntFlowManager::updatePodSvcStatsFlows (const string &uuid,
                 if (!asWrapper)
                     continue;
 
-                LOG(TRACE) << "####### pod<-->svc Service ########";
-                LOG(TRACE) << *asWrapper;
+                LOG(DEBUG) << "####### pod<-->svc Service ########";
+                LOG(DEBUG) << *asWrapper;
 
                 const Service& as = *asWrapper.get();
                 if ((as.getServiceMode() != Service::LOADBALANCER)
                         || as.isExternal()) {
-                    LOG(TRACE) << "podsvc not handled for non-LB or ext services";
+                    LOG(DEBUG) << "podsvc not handled for non-LB or ext services";
                     // clear obs and prom metrics during update;
                     // below will be no-op during create
                     podSvcFlowRemExpr(uuid+":"+svcUuid);
@@ -4061,16 +3089,11 @@ void IntFlowManager::updatePodSvcStatsFlows (const string &uuid,
                     // Dont create EPIP <--> SVCIP flows if EPIP is one of the
                     // next hops of this service.
                     const auto& nhips = sm.getNextHopIPs();
-<<<<<<< HEAD
                     if (nhips.find(epipStr) == nhips.end()) {
                         podSvcFlowAddExpr(uuid+":"+svcUuid,
                                           epipStr, sm,
                                           endPoint.getAttributes(),
                                           as.getAttributes());
-=======
-                    if (nhips.find(cidr.first.to_string()) == nhips.end()) {
-                        podSvcFlowAddExpr(uuid+":"+svcUuid, cidr.first.to_string(), sm);
->>>>>>> origin/master
                     } else {
                         epsvc_uuids.insert(uuid+":"+svcUuid);
                     }
@@ -4080,11 +3103,7 @@ void IntFlowManager::updatePodSvcStatsFlows (const string &uuid,
 
         for (const auto& epsvc_uuid: epsvc_uuids) {
             if (uuid_felist_map.find(epsvc_uuid) == uuid_felist_map.end()) {
-<<<<<<< HEAD
                 LOG(DEBUG) << "podsvc: no flows created for epsvc_uuid: " << epsvc_uuid;
-=======
-                LOG(TRACE) << "podsvc: no flows created for epsvc_uuid: " << epsvc_uuid;
->>>>>>> origin/master
                 podSvcFlowRemExpr(epsvc_uuid);
             }
         }
@@ -4097,11 +3116,7 @@ void IntFlowManager::updatePodSvcStatsFlows (const string &uuid,
 
 void IntFlowManager::programServiceSnatDnatFlows (const string& uuid)
 {
-<<<<<<< HEAD
     LOG(DEBUG) << "Updating snat dnat flows for service " << uuid;
-=======
-    LOG(TRACE) << "Updating snat dnat flows for service " << uuid;
->>>>>>> origin/master
 
     ServiceManager& srvMgr = agent.getServiceManager();
     shared_ptr<const Service> asWrapper = srvMgr.getService(uuid);
@@ -4225,35 +3240,18 @@ void IntFlowManager::programServiceSnatDnatFlows (const string& uuid)
                                            flow::meta::FROM_SERVICE_INTERFACE);
 
                             ActionBuilder setMark;
-                            // Carry the ctMark information in reg12 so that cluster
-                            // service-pod stats flows can use this info to avoid getting
-                            // get hit for traffic coming from on-prem.
                             setMark.reg(MFF_CT_MARK, ctMark);
                             ipMap.action()
-                                .reg(MFF_REG12, ctMark)
                                 .conntrack(ActionBuilder::CT_COMMIT,
                                            static_cast<mf_field_id>(0),
                                            zoneId, 0xff, 0, setMark);
                         }
 
-<<<<<<< HEAD
                         // If a cookie was already allocated by updateSvcTgtStatsFlows(), then
                         // use it.
                         if (!serviceStatsFlowDisabled) {
                             const string& ingStr = "antosvc:svc-tgt:"+uuid+":"+nextHopAddr.to_string();
                             uint32_t cookieIdIg = idGen.getIdNoAlloc(ID_NMSPC_SVCSTATS, ingStr);
-=======
-                        // If a cookie was already allocated by updateSvcTgtStatsFlows()
-                        // or updateSvcExtStatsFlows() then use it.
-                        if (!serviceStatsFlowDisabled) {
-                            const string& extStr = "extosvc:svc-ext:"+uuid+":"+nextHopAddr.to_string();
-                            const string& ingStr = "antosvc:svc-tgt:"+uuid+":"+nextHopAddr.to_string();
-                            uint32_t cookieIdIg = 0;
-                            if ((ofPort != OFPP_NONE) && as.getIfaceVlan())
-                                cookieIdIg = idGen.getIdNoAlloc(ID_NMSPC_SVCSTATS, extStr);
-                            else
-                                cookieIdIg = idGen.getIdNoAlloc(ID_NMSPC_SVCSTATS, ingStr);
->>>>>>> origin/master
                             if (cookieIdIg != static_cast<uint32_t>(-1)) {
                                 ipMap.cookie(ovs_htonll((uint64_t)cookieIdIg))
                                      .flags(OFPUTIL_FF_SEND_FLOW_REM);
@@ -4295,24 +3293,11 @@ void IntFlowManager::programServiceSnatDnatFlows (const string& uuid)
                         matchActionServiceProto(ipRevMap, proto, sm,
                                                 false, true);
 
-<<<<<<< HEAD
                         // If a cookie was already allocated by updateSvcTgtStatsFlows(), then
                         // use it.
                         if (!serviceStatsFlowDisabled) {
                             const string& egrStr = "svctoan:svc-tgt:"+uuid+":"+nextHopAddr.to_string();
                             uint32_t cookieIdEg = idGen.getIdNoAlloc(ID_NMSPC_SVCSTATS, egrStr);
-=======
-                        // If a cookie was already allocated by updateSvcTgtStatsFlows(),
-                        // or updateSvcExtStatsFlows() then use it.
-                        if (!serviceStatsFlowDisabled) {
-                            const string& extStr = "svctoex:svc-ext:"+uuid+":"+nextHopAddr.to_string();
-                            const string& egrStr = "svctoan:svc-tgt:"+uuid+":"+nextHopAddr.to_string();
-                            uint32_t cookieIdEg = 0;
-                            if ((ofPort != OFPP_NONE) && as.getIfaceVlan())
-                                cookieIdEg = idGen.getIdNoAlloc(ID_NMSPC_SVCSTATS, extStr);
-                            else
-                                cookieIdEg = idGen.getIdNoAlloc(ID_NMSPC_SVCSTATS, egrStr);
->>>>>>> origin/master
                             if (cookieIdEg != static_cast<uint32_t>(-1)) {
                                 ipRevMap.cookie(ovs_htonll((uint64_t)cookieIdEg))
                                         .flags(OFPUTIL_FF_SEND_FLOW_REM);
@@ -5512,7 +4497,7 @@ void IntFlowManager::handleRoutingDomainUpdate(const URI& rdURI) {
     LOG(DEBUG) << "Updating routing domain " << rdURI;
 #ifdef HAVE_PROMETHEUS_SUPPORT
     prometheusManager.addNUpdateRDDropCounter(rdURI.toString(),
-                                              true, 0, 0);
+                                              true);
 #endif
 
     FlowEntryList rdRouteFlows;
@@ -6184,14 +5169,6 @@ static bool svcStatsIdGarbageCb(EndpointManager& epManager,
     // antosvc:svc-tgt:svc-uuid:nh-ip
     // svctoan:svc-tgt:svc-uuid:nh-ip
 
-    // The idgen strings for extToSvc and svcToExt will have below format
-    // extosvc:svc-ext:svc-uuid:nh-ip
-    // svctoex:svc-ext:svc-uuid:nh-ip
-
-    // The idgen strings for nodeipToSvc and svcTonodeip will have below format
-    // notosvc:svc-nod:svc-uuid:nh-ip
-    // svctono:svc-nod:svc-uuid:nh-ip
-
     const string& statType = str.substr(0,7);
     if ((statType == "eptosvc") || (statType == "svctoep")) {
         size_t pos1 = str.find(":");
@@ -6200,9 +5177,7 @@ static bool svcStatsIdGarbageCb(EndpointManager& epManager,
         const string& svcUuid = str.substr(pos2+1);
         return ((bool)serviceManager.getService(svcUuid)
                  && (bool)epManager.getEndpoint(epUuid));
-    } else if ((statType == "antosvc") || (statType == "svctoan")
-                || (statType == "extosvc") || (statType == "svctoex")
-                || (statType == "notosvc") || (statType == "svctono")) {
+    } else if ((statType == "antosvc") || (statType == "svctoan")) {
         size_t pos1 = str.find(":");
         size_t pos2 = str.find(":", pos1+1);
         size_t pos3 = str.find(":", pos2+1);
@@ -6216,14 +5191,6 @@ static bool svcStatsIdGarbageCb(EndpointManager& epManager,
         // Check if the service target got deleted
         if (!SvcTargetCounter::resolve(framework, svcUuid, nhipStr))
             return false;
-
-        // Ensure vethhostac is present
-        if ((statType == "notosvc") || (statType == "svctono")) {
-            unordered_set<std::string> eps;
-            epManager.getEndpointsByAccessIface("veth_host_ac", eps);
-            if (!eps.size())
-                return false;
-        }
 
         // ensure the pod is still local
         const ip_ep_map_t& ip_ep_map = epManager.getIPLocalEpMap();

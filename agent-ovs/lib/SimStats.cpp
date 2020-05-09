@@ -14,13 +14,14 @@
 #include <modelgbp/gbpe/L24ClassifierCounter.hpp>
 
 
+
 namespace opflexagent {
 
 using namespace modelgbp::gbpe;
 
 SimStats::SimStats(opflexagent::Agent& agent_)
-    : agent(agent_), intCounter(0), contractCounter(0),
-      secGrpCounter(0), stopping(false) {}
+    : agent(agent_), timer_interval(0), intCounter(0), contractCounter(0),
+      secGrpCounter(0), stopping(false)  {}
 
 SimStats::~SimStats() {}
 
@@ -31,7 +32,8 @@ void SimStats::updateInterfaceCounters() {
     std::unordered_set<std::string> eps;
     epMgr.getEndpointUUIDs(eps);
     for (auto& uuid : eps) {
-        opflexagent::EndpointManager::EpCounters counters{};
+        opflexagent::EndpointManager::EpCounters counters;
+        memset(&counters, 0, sizeof(counters));
         uint64_t c = ++intCounter;
         counters.txPackets = c;
         counters.rxPackets = c;
@@ -97,17 +99,22 @@ void SimStats::updateContractCounters() {
 }
 
 void SimStats::updateSecGrpCounters() {
+
     auto& polMgr = agent.getPolicyManager();
     auto su = modelgbp::observer::PolicyStatUniverse::resolve(agent.getFramework());
     std::unique_lock<std::mutex> guard(mutex);
     opflex::modb::Mutator mutator(agent.getFramework(), "policyelement");
+
     opflexagent::PolicyManager::rule_list_t rules;
+
+
     uint64_t c = ++secGrpCounter;
     for (auto& sec : secGroups) {
         polMgr.getSecGroupRules(sec, rules);
         for (auto& rule : rules) {
             auto& l24Classifier =
                 rule->getL24Classifier()->getURI().toString();
+
             SecGrpClassifierCounter::remove(agent.getFramework(), agent.getUuid(), (c - 1),
                                     l24Classifier);
             su.get()->addGbpeSecGrpClassifierCounter(agent.getUuid(), c,
@@ -119,6 +126,7 @@ void SimStats::updateSecGrpCounters() {
         }
     }
     mutator.commit();
+
 }
 
 void SimStats::on_timer_contract(const boost::system::error_code& ec) {

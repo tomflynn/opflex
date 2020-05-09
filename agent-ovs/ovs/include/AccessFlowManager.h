@@ -16,7 +16,6 @@
 #include <opflexagent/Agent.h>
 #include <opflexagent/EndpointManager.h>
 #include <opflexagent/PolicyListener.h>
-#include <opflexagent/ExtraConfigListener.h>
 #include "PortMapper.h"
 #include "SwitchManager.h"
 #include <opflexagent/TaskQueue.h>
@@ -35,7 +34,6 @@ class AccessFlowManager : public EndpointListener,
                           public PortStatusListener,
                           public PolicyListener,
                           public SwitchStateHandler,
-                          public ExtraConfigListener,
                           private boost::noncopyable {
 public:
     /**

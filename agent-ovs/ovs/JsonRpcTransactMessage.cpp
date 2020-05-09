@@ -22,14 +22,15 @@ JsonRpcTransactMessage::JsonRpcTransactMessage(OvsdbOperation operation_, OvsdbT
     operation(operation_), table(table_) {}
 
 JsonRpcTransactMessage::JsonRpcTransactMessage(const JsonRpcTransactMessage& copy) : JsonRpcMessage("transact", REQUEST),
-    conditions(copy.conditions), columns(copy.columns), rowData(copy.rowData), mutateRowData(copy.mutateRowData), kvPairs(copy.kvPairs),
+    conditions(copy.conditions), columns(copy.columns), rows(copy.rows), kvPairs(copy.kvPairs),
     operation(copy.getOperation()), table(copy.getTable()) {}
 
 void JsonRpcTransactMessage::serializePayload(yajr::rpc::SendHandler& writer) {
+    LOG(DEBUG) << "serializePayload send handler";
     (*this)(writer);
 }
 
-static const char* OvsdbOperationStrings[] = {"select", "insert", "update", "mutate", "delete"};
+static const char* OvsdbOperationStrings[] = {"select", "insert", "update"};
 
 static const char* toString(OvsdbOperation operation) {
     return OvsdbOperationStrings[static_cast<uint32_t>(operation)];
@@ -39,12 +40,6 @@ static const char* OvsdbTableStrings[] = {"Port", "Interface", "Bridge", "IPFIX"
 
 static const char* toString(OvsdbTable table) {
     return OvsdbTableStrings[static_cast<uint32_t>(table)];
-}
-
-static const char* OvsdbFunctionStrings[] = {"=="};
-
-static const char* toString(OvsdbFunction function) {
-    return OvsdbFunctionStrings[static_cast<uint32_t>(function)];
 }
 
 template<typename T>
@@ -109,7 +104,8 @@ bool JsonRpcTransactMessage::operator()(rapidjson::Writer<T> & writer) {
                 writer.StartArray();
                 string lhs = get<0>(elem);
                 writer.String(lhs.c_str());
-                writer.String(toString(get<1>(elem)));
+                string condition = get<1>(elem);
+                writer.String(condition.c_str());
                 string rhs = get<2>(elem);
                 if (lhs == "_uuid" ||
                         lhs == "mirrors") {
@@ -138,14 +134,14 @@ bool JsonRpcTransactMessage::operator()(rapidjson::Writer<T> & writer) {
         writer.EndArray();
     }
 
-    if (!rowData.empty()) {
+    if (!rows.empty()) {
         writer.String("row");
         writer.StartObject();
-        for (auto& rowEntry : rowData) {
-            string col = rowEntry.first;
+        for (auto& row : rows) {
+            string col = row.first;
             LOG(DEBUG) << "row label " << col;
             writer.String(col.c_str());
-            const TupleDataSet& tdsPtr = rowEntry.second;
+            const TupleDataSet& tdsPtr = row.second;
             if (!tdsPtr.label.empty()) {
                 writer.StartArray();
                 writer.String(tdsPtr.label.c_str());
@@ -163,34 +159,6 @@ bool JsonRpcTransactMessage::operator()(rapidjson::Writer<T> & writer) {
         }
         writer.EndObject();
     }
-    if (getOperation() == OvsdbOperation::MUTATE && !mutateRowData.empty()) {
-        writer.String("mutations");
-        writer.StartArray();
-        for (auto& rowEntry : mutateRowData) {
-            string col = rowEntry.first;
-            LOG(DEBUG) << "row label " << col;
-            writer.StartArray();
-            writer.String(col.c_str());
-            string mutateRowOperation = toString(rowEntry.second.first);
-            writer.String(mutateRowOperation.c_str());
-            const TupleDataSet &tdsPtr = rowEntry.second.second;
-            if (!tdsPtr.label.empty()) {
-                writer.StartArray();
-                writer.String(tdsPtr.label.c_str());
-                writer.StartArray();
-                LOG(DEBUG) << "label " << tdsPtr.label;
-                for (auto &val : tdsPtr.tuples) {
-                    writePair<T>(writer, val, false);
-                }
-                writer.EndArray();
-                writer.EndArray();
-            } else {
-                writePair(writer, *(tdsPtr.tuples.begin()), false);
-            }
-            writer.EndArray();
-        }
-        writer.EndArray();
-    }
     return true;
 }
 
@@ -200,7 +168,7 @@ TransactReq::TransactReq(const list<JsonRpcTransactMessage>& msgs, uint64_t reqI
 }
 
 void TransactReq::serializePayload(yajr::rpc::SendHandler& writer) {
-    LOG(DEBUG) << "serializePayload send handler - reqId " << std::to_string(reqId);
+    LOG(DEBUG) << "serializePayload send handler";
     (*this)(writer);
 }
 

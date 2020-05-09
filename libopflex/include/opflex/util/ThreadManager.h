@@ -74,7 +74,6 @@ private:
 
     class AdaptorImpl : public ofcore::MainLoopAdaptor {
     public:
-        virtual ~AdaptorImpl() {};
         virtual void runOnce();
 
         uv_loop_t main_loop;

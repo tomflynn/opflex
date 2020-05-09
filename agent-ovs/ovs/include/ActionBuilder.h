@@ -69,6 +69,12 @@ public:
     void build(ofputil_bucket *dstBucket);
 
     /**
+     * Set the flowHasVlan bit for actions
+     * @return this action builder for chaining
+     */
+    ActionBuilder& setFlowHasVlan(bool hasVlan = true);
+
+    /**
      * If this action builder has a parent flow builder, return it.
      * Asserts if this builder has no parent.
      * @return the parent

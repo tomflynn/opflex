@@ -34,6 +34,8 @@
                                                              (Passive Listeners)
 */
 
+
+
 /*
    ____        _     _ _        _       _             __
   |  _ \ _   _| |__ | (_) ___  (_)_ __ | |_ ___ _ __ / _| __ _  ___ ___  ___
@@ -54,7 +56,11 @@
         ::yajr::Peer::UvLoopSelector uvLoopSelector
     ) {
 
-    LOG(INFO) << ip_address << ":" << port;
+    LOG(INFO)
+        << ip_address
+        << ":"
+        << port
+    ;
 
     ::yajr::comms::internal::ListeningTcpPeer * peer = NULL;
 #if __cpp_exceptions || __EXCEPTIONS
@@ -72,7 +78,9 @@
 #endif
 
     if (!peer) {
-        LOG(WARNING) << "out of memory, unable to create listener";
+        LOG(WARNING)
+            << "out of memory, unable to create listener"
+        ;
         return NULL;
     }
 
@@ -90,7 +98,12 @@
         return NULL;
     }
 
+    VLOG(1)
+        << peer
+        << " queued up for listening"
+    ;
     peer->insert(::yajr::comms::internal::Peer::LoopData::TO_LISTEN);
+
     return peer;
 }
 
@@ -124,11 +137,18 @@
 #endif
 
     if (!peer) {
-        LOG(WARNING) << "out of memory, unable to create listener";
+        LOG(WARNING)
+            << "out of memory, unable to create listener"
+        ;
         return NULL;
     }
 
+    VLOG(1)
+        << peer
+        << " queued up for listening"
+    ;
     peer->insert(::yajr::comms::internal::Peer::LoopData::TO_LISTEN);
+
     return peer;
 }
 
@@ -140,8 +160,14 @@ using namespace yajr::comms::internal;
 void ::yajr::comms::internal::ListeningTcpPeer::retry() {
 
     if (destroying_) {
-        LOG(INFO) << this << "Not retrying because of pending destroy";
+
+        LOG(INFO)
+            << this
+            << "Not retrying because of pending destroy"
+        ;
+
         return;
+
     }
 
     int rc;
@@ -157,6 +183,10 @@ void ::yajr::comms::internal::ListeningTcpPeer::retry() {
         goto failed_tcp_init;
     }
 
+    VLOG(1)
+        << this
+        << " up() for listening tcp init"
+    ;
     up();
 
     if ((rc = uv_tcp_bind(reinterpret_cast<uv_tcp_t *>(getHandle()),
@@ -185,17 +215,26 @@ void ::yajr::comms::internal::ListeningTcpPeer::retry() {
     }
 
     status_ = Peer::kPS_LISTENING;
+
     insert(internal::Peer::LoopData::LISTENING);
+
+    VLOG(1)
+        << "listening!"
+    ;
+
     connected_ = 1;
 
     return;
 
 failed_after_init:
-    VLOG(1) << "closing tcp handle because of immediate failure after init";
+    VLOG(1)
+        << "closing tcp handle because of immediate failure after init"
+    ;
     uv_close(getHandle(), on_close);
 
 failed_tcp_init:
     insert(internal::Peer::LoopData::RETRY_TO_LISTEN);
+
     onError(rc);
 }
 
@@ -226,6 +265,10 @@ void ::yajr::comms::internal::ListeningUnixPeer::retry() {
         goto failed_unix_init;
     }
 
+    VLOG(1)
+        << this
+        << " up() for listening domain socket init"
+    ;
     up();
 
     if ((rc = uv_pipe_bind(reinterpret_cast<uv_pipe_t *>(getHandle()),
@@ -253,7 +296,13 @@ void ::yajr::comms::internal::ListeningUnixPeer::retry() {
     }
 
     status_ = Peer::kPS_LISTENING;
+
     insert(internal::Peer::LoopData::LISTENING);
+
+    VLOG(1)
+        << "listening!"
+    ;
+
     connected_ = 1;
 
     return;
@@ -350,7 +399,9 @@ void on_passive_connection(uv_stream_t * server_handle, int status)
 #endif
 
     if (!peer) {
-        LOG(WARNING) << "out of memory, dropping new peer on the floor";
+        LOG(WARNING)
+            << "out of memory, dropping new peer on the floor"
+        ;
         return NULL;
     }
 
@@ -362,6 +413,7 @@ void on_passive_connection(uv_stream_t * server_handle, int status)
     }
 
     return peer;
+
 }
 
 class PassiveUnixPeer : public PassivePeer {
@@ -409,7 +461,9 @@ public:
 #endif
 
     if (!peer) {
-        LOG(WARNING) << "out of memory, dropping new peer on the floor";
+        LOG(WARNING)
+            << "out of memory, dropping new peer on the floor"
+        ;
         return NULL;
     }
 
@@ -432,6 +486,8 @@ public:
     return peer;
 
 }
+
+
 
 /*
      _   _ _   _ _ _ _            __                  _   _
@@ -469,3 +525,4 @@ int ::yajr::comms::internal::ListeningTcpPeer::setAddrFromIpAndPort(
 
 } /* yajr::comms namespace */
 } /* yajr namespace */
+

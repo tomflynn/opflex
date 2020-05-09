@@ -23,29 +23,26 @@ extern "C" {
 
 namespace opflexagent {
 
-mutex OvsdbConnection::ovsdbMtx;
 
 void OvsdbConnection::send_req_cb(uv_async_t* handle) {
-    unique_lock<mutex> lock(OvsdbConnection::ovsdbMtx);
     auto* reqCbd = (req_cb_data*)handle->data;
-    shared_ptr<TransactReq>& req = reqCbd->req;
+    TransactReq* req = reqCbd->req;
     yajr::rpc::MethodName method(req->getMethod().c_str());
-    opflex::jsonrpc::PayloadWrapper wrapper(req.get());
+    opflex::jsonrpc::PayloadWrapper wrapper(req);
     yajr::rpc::OutboundRequest outr =
         yajr::rpc::OutboundRequest(wrapper, &method, req->getReqId(), reqCbd->peer);
     outr.send();
+    delete(req);
     delete(reqCbd);
 }
 
-void OvsdbConnection::sendTransaction(const list<JsonRpcTransactMessage>& requests, Transaction* trans) {
-    uint64_t reqId = 0;
+void OvsdbConnection::sendTransaction(const uint64_t& reqId, const list<JsonRpcTransactMessage>& requests, Transaction* trans) {
     {
         unique_lock<mutex> lock(transactionMutex);
-        reqId = getNextId();
         transactions[reqId] = trans;
     }
     auto* reqCbd = new req_cb_data();
-    reqCbd->req = std::make_shared<TransactReq>(requests, reqId);
+    reqCbd->req = new TransactReq(requests, reqId);
     reqCbd->peer = getPeer();
     send_req_async.data = (void*)reqCbd;
     uv_async_send(&send_req_async);
@@ -53,7 +50,7 @@ void OvsdbConnection::sendTransaction(const list<JsonRpcTransactMessage>& reques
 
 void OvsdbConnection::start() {
     LOG(DEBUG) << "Starting .....";
-    unique_lock<mutex> lock(OvsdbConnection::ovsdbMtx);
+    unique_lock<mutex> lock(mtx);
     client_loop = threadManager.initTask("OvsdbConnection");
     yajr::initLoop(client_loop);
     uv_async_init(client_loop,&connect_async, connect_cb);
@@ -63,19 +60,12 @@ void OvsdbConnection::start() {
 }
 
 void OvsdbConnection::connect_cb(uv_async_t* handle) {
-    unique_lock<mutex> lock(OvsdbConnection::ovsdbMtx);
     OvsdbConnection* ocp = (OvsdbConnection*)handle->data;
-    if (ocp->ovsdbUseLocalTcpPort) {
-        ocp->peer = yajr::Peer::create("127.0.0.1",
-                                       "6640",
-                                       on_state_change,
-                                       ocp, loop_selector, false);
-    } else {
-        std::string swPath;
-        swPath.append(ovs_rundir()).append("/db.sock");
-        ocp->peer = yajr::Peer::create(swPath, on_state_change,
-                                       ocp, loop_selector, false);
-    }
+    // TODO - don't hardcode socket...this whole thing needs to moved out of libopflex
+    std::string swPath;
+    swPath.append(ovs_rundir()).append("/db.sock");
+    ocp->peer = yajr::Peer::create(swPath, on_state_change,
+                                   ocp, loop_selector, false);
     assert(ocp->peer);
 }
 
@@ -105,7 +95,9 @@ void OvsdbConnection::stop() {
             break;
         case yajr::StateChange::TRANSPORT_FAILURE:
             conn->setConnected(false);
-            LOG(ERROR) << "SSL Connection error";
+            {
+              LOG(ERROR)  << "SSL Connection error: ";
+            }
             break;
         case yajr::StateChange::FAILURE:
             conn->setConnected(false);
@@ -124,10 +116,8 @@ uv_loop_t* OvsdbConnection::loop_selector(void* data) {
 }
 
 void OvsdbConnection::connect() {
-    if (!connected) {
-        connect_async.data = this;
-        uv_async_send(&connect_async);
-    }
+    connect_async.data = this;
+    uv_async_send(&connect_async);
 }
 
 void OvsdbConnection::disconnect() {

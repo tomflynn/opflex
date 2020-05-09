@@ -286,10 +286,6 @@ public:
             uint32_t _layerId):
                 layerTypeName(_layerTypeName), layerName(_layerName),
                 layerTypeId(_layerTypeId), layerId(_layerId), hash(0){}
-
-    /** Destructor */
-    virtual ~PacketDecoderLayerVariant() {};
-
     /**
      * Get the format string for this variant's output
      * @param fmtStr format String for variant output
@@ -386,10 +382,6 @@ public:
         numOutArgs(num_args) {
         amOptionLayer = (layerTypeName == layerName) && (key == 0);
     };
-
-    /** Destructor */
-    virtual ~PacketDecoderLayer() {};
-
     /**
      * Whether this layer supports option headers
      * @return If option headers are supported

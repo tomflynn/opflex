@@ -18,6 +18,8 @@ namespace opflexagent {
 using std::string;
 using std::lock_guard;
 using std::mutex;
+typedef uint16_t UriLenType;
+const uint32_t MAX_ID_VALUE = (1 << 31);
 
 IdGenerator::IdGenerator() : cleanupInterval(duration(5*60*1000)) {
 

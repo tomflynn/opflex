@@ -123,9 +123,8 @@
         //             // gratuitous-broadcast: Send gratuitous arp
         //             //   broadcast requests
         //             // rarp-broadcast: Send rarp broadcast requests
-        //             // garp-rarp-broadcast: Send garp and rarp broadcast requests
-        //             // Default: garp-rarp-broadcast
-        //             "tunnel-endpoint-mode": "garp-rarp-broadcast",
+        //             // Default: rarp-broadcast
+        //             "tunnel-endpoint-mode": "rarp-broadcast",
         //             // tunnel endpoint advertisement interval in seconds
         //             // Default: 300 s
         //             "tunnel-endpoint-interval": 300
@@ -153,11 +152,6 @@
         //     // Location to write multicast groups for the mcast-daemon
         //     // Default: "DEFAULT_MCAST_GROUP_FILE"
         //     "mcast-group-file": "DEFAULT_MCAST_GROUP_FILE"
-        //
-        //     // OVSDB connection to use local ptcp port 6640
-        //     // instead of the local socket
-        //     // Default: false
-        //     "ovsdb-use-local-tcp-port": "false"
         // }
     }
 }

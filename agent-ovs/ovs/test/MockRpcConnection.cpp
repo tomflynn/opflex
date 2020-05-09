@@ -35,24 +35,10 @@ ResponseDict& ResponseDict::Instance() {
     return inst;
 }
 
-void MockRpcConnection::sendTransaction(const list<JsonRpcTransactMessage>& requests, Transaction* trans) {
-    // prepare request
-    uint64_t reqId = getNextId();
-    std::shared_ptr<TransactReq> transactReq = std::make_shared<TransactReq>(TransactReq(requests, reqId));
-    yajr::rpc::MethodName method(transactReq->getMethod().c_str());
-    opflex::jsonrpc::PayloadWrapper wrapper(transactReq.get());
-    ::yajr::internal::StringQueue sq;
-    yajr::rpc::SendHandler sendHandler(sq);
-    wrapper(sendHandler);
-
-    // fake the response
+void MockRpcConnection::sendTransaction(const uint64_t& reqId, const list<JsonRpcTransactMessage>& requests, Transaction* trans) {
     ResponseDict& rDict = ResponseDict::Instance();
     auto itr = rDict.dict.find(reqId);
     if (itr != rDict.dict.end()) {
-<<<<<<< HEAD
-=======
-        LOG(DEBUG) << "sending response for reqId " << reqId;
->>>>>>> origin/master
         trans->handleTransaction(reqId, rDict.d[itr->second]);
     } else {
         LOG(DEBUG) << "No response found for req " << reqId;

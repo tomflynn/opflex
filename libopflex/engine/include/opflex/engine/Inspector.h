@@ -55,7 +55,7 @@ public:
     /**
      * Destroy the inspector
      */
-    virtual ~Inspector();
+    ~Inspector();
 
     /**
      * Set the name for the socket/pipe

@@ -183,7 +183,7 @@ class Message {
      *
      * @return a pointer to the communication peer for this message.
      */
-    yajr::Peer* getPeer() const {
+    yajr::Peer const * getPeer() const {
         return peer_;
     }
 
@@ -211,7 +211,7 @@ class Message {
      * from derived classes' constructors.
      */
     explicit Message(
-            yajr::Peer* peer
+            yajr::Peer const * peer
             )
         : peer_(peer)
         {}
@@ -224,7 +224,7 @@ class Message {
     uv_loop_t const * getUvLoop() const;
 
     /** pointer to the peer so that it can be set multiple times */
-    yajr::Peer* peer_;
+    yajr::Peer const * peer_;
 
 };
 
@@ -270,7 +270,7 @@ class InboundMessage : public Message {
      * @param payload payload
      */
     explicit InboundMessage(
-            yajr::Peer& peer,               /* < [in] where to send to */
+            yajr::Peer const & peer,               /* < [in] where to send to */
             rapidjson::Value const & payload
             )
         :
@@ -307,12 +307,12 @@ class OutboundMessage : public Message, virtual public Identifier {
      */
     bool Accept(yajr::rpc::SendHandler& handler);
 
+  protected:
+
     /**
      * Send this message now!
      */
     bool send();
-
-  protected:
 
     /**
      * @brief Constructor needed by derived classes
@@ -322,7 +322,7 @@ class OutboundMessage : public Message, virtual public Identifier {
      */
     explicit OutboundMessage(
         PayloadGenerator const & payloadGenerator,/**< [in] payload generator */
-        yajr::Peer* peer                    /**< [in] where to send to */
+        yajr::Peer const * peer                    /**< [in] where to send to */
         )
         :
           Message(peer),
@@ -358,7 +358,7 @@ class InboundRequest : public InboundMessage, public RemoteIdentifier {
      * @brief Constructor for an inbound request message
      */
     InboundRequest(
-            yajr::Peer& peer,  /**< [in] where we received from */
+            yajr::Peer const & peer,  /**< [in] where we received from */
             rapidjson::Value const & params,/**< [in] the params value to send */
             rapidjson::Value const & id      /**< [in] the id of this message */
             )
@@ -378,7 +378,15 @@ class InboundRequest : public InboundMessage, public RemoteIdentifier {
  * error or a result.
  */
 class OutboundResponse : public OutboundMessage, public RemoteIdentifier {
-public:
+
+  public:
+    /**
+     * Tell if this response is an error (or a result)
+     *
+     * @return true on error, false on result
+     */
+    virtual bool isError() = 0;
+
     /**
      * Send this message now!
      */
@@ -408,7 +416,7 @@ public:
      * but only * from derived classes' constructors.
      */
     explicit OutboundResponse(
-        yajr::Peer& peer,            /**< [in] where to send to */
+        yajr::Peer const & peer,            /**< [in] where to send to */
         PayloadGenerator const & response, /**< [in] the error/result to send */
         rapidjson::Value const & id /**< [in] the desired id for this message */
         )
@@ -426,6 +434,7 @@ public:
     virtual bool emitMethod(yajr::rpc::SendHandler& handler) {
         return true;
     }
+
 };
 
 /**
@@ -449,7 +458,7 @@ class OutboundError : public OutboundResponse {
      * @brief Constructor for an outbound error message.
      */
     explicit OutboundError(
-        yajr::Peer& peer,                   /**< [in] where to send to */
+        yajr::Peer const & peer,                   /**< [in] where to send to */
         PayloadGenerator const & error,   /**< [in] the error value to return */
         rapidjson::Value const & id /**< [in] the desired id for this message */
         )
@@ -457,7 +466,16 @@ class OutboundError : public OutboundResponse {
         {
         }
 
-protected:
+    /**
+     * Tell if this response is an error (or a result)
+     *
+     * @return true, since this is an error
+     */
+    virtual bool isError() {
+      return true;
+    }
+
+  protected:
     /**
      * @brief Get payload key
      *
@@ -497,13 +515,22 @@ class OutboundResult : public OutboundResponse {
      * @param id identifier
      */
     explicit OutboundResult(
-        yajr::Peer& peer,            /**< [in] where to send to */
+        yajr::Peer const & peer,            /**< [in] where to send to */
         PayloadGenerator const & result, /**< [in] the result value to return */
         rapidjson::Value const & id /**< [in] the desired id for this message */
         )
         : OutboundResponse(peer, result, id)
         {
         }
+
+    /**
+     * Tell if this response is an error (or a result)
+     *
+     * @return false, since this is a result
+     */
+    virtual bool isError() {
+      return false;
+    }
 
     /**
      * @brief Get payload key
@@ -545,7 +572,7 @@ class OutboundRequest : public OutboundMessage,
         PayloadGenerator const & params,   /* < [in] the params value to send */
         MethodName const * methodName,
         uint64_t id, /* FIXME */
-        yajr::Peer* peer                    /* < [in] where to send to */
+        yajr::Peer const * peer                    /* < [in] where to send to */
         )
         :
             OutboundMessage(params, peer),
@@ -591,7 +618,7 @@ class OutboundRequest : public OutboundMessage,
      * @return this message.
      */
     void setPeer(
-        yajr::Peer* peer                     /**< [in] the peer to set */
+        yajr::Peer const * peer                     /**< [in] the peer to set */
         ) {
         peer_ = peer;
     }
@@ -631,7 +658,7 @@ class InboundResponse : public InboundMessage,
      * @param id identifier
      */
     InboundResponse(
-        yajr::Peer& peer,      /**< [in] where we received from */
+        yajr::Peer const & peer,      /**< [in] where we received from */
         rapidjson::Value const & response,/**< [in] the error/result received */
         rapidjson::Value const & id          /**< [in] the id of this message */
         );
@@ -651,7 +678,7 @@ class InboundError : public InboundResponse {
      * @param id identifier
      */
     InboundError(
-            yajr::Peer& peer,  /**< [in] where we received from */
+            yajr::Peer const & peer,  /**< [in] where we received from */
             rapidjson::Value const & error,      /**< [in] the error received */
             rapidjson::Value const & id      /**< [in] the id of this message */
             )
@@ -683,7 +710,7 @@ class InboundResult : public InboundResponse {
      * @param id identifier
      */
     InboundResult(
-            yajr::Peer& peer,  /**< [in] where we received from */
+            yajr::Peer const & peer,  /**< [in] where we received from */
             rapidjson::Value const & result,    /**< [in] the result received */
             rapidjson::Value const & id      /**< [in] the id of this message */
             )

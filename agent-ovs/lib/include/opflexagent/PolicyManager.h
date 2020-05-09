@@ -148,13 +148,18 @@ public:
      * @param mac_ Redirect mac address
      * @param rd_ Routing Domain object
      * @param bd_ Bridge Domain object
+     * @param rdInstCtxt_ Routing Domain Instance context
+     * @param bdInstCtxt_ Bridge Domain Instance context
      */
     PolicyRedirectDest(const std::shared_ptr<modelgbp::gbp::RedirectDest> dst_,
                        const boost::asio::ip::address& ip_,
                        const opflex::modb::MAC& mac_,
                        const std::shared_ptr<modelgbp::gbp::RoutingDomain>& rd_,
-                       const std::shared_ptr<modelgbp::gbp::BridgeDomain>& bd_
-                       ):ip(ip_), mac(mac_), redirDst(dst_), rd(rd_), bd(bd_){}
+                       const std::shared_ptr<modelgbp::gbp::BridgeDomain>& bd_,
+                       const std::shared_ptr<modelgbp::gbpe::InstContext>& rdInstCtxt_,
+                       const std::shared_ptr<modelgbp::gbpe::InstContext>& bdInstCtxt_
+                       ):ip(ip_), mac(mac_), redirDst(dst_), rd(rd_), bd(bd_),
+                         rdInstCtxt(rdInstCtxt_), bdInstCtxt(bdInstCtxt_){}
     /**
      * Get the RoutingDomain for the redirect destination.
      * @return the RoutingDomain object.
@@ -164,11 +169,27 @@ public:
     }
 
     /**
+     * Get the RoutingDomain for the redirect destination.
+     * @return the RoutingDomain object.
+     */
+    uint32_t getRDVnid() {
+        return rdInstCtxt->getEncapId().get();
+    }
+
+    /**
      * Get the BridgeDomain for the redirect destination.
      * @return the BridgeDomain object.
      */
     const std::shared_ptr<modelgbp::gbp::BridgeDomain> getBD () const {
         return bd;
+    }
+
+    /**
+     * Get the BDVnid for the redirect destination.
+     * @return the bd vnid .
+     */
+    uint32_t getBDVnid() {
+        return bdInstCtxt->getEncapId().get();
     }
 
     /**
@@ -193,6 +214,8 @@ private:
     std::shared_ptr<modelgbp::gbp::RedirectDest> redirDst;
     std::shared_ptr<modelgbp::gbp::RoutingDomain> rd;
     std::shared_ptr<modelgbp::gbp::BridgeDomain> bd;
+    std::shared_ptr<modelgbp::gbpe::InstContext> rdInstCtxt;
+    std::shared_ptr<modelgbp::gbpe::InstContext> bdInstCtxt;
     friend bool operator==(const PolicyRedirectDest& lhs,
                            const PolicyRedirectDest& rhs);
 };
@@ -258,7 +281,7 @@ public:
     /**
      * Check whether internal flag is set on this route.
      */
-    bool isPresent() const {
+    bool isPresent() {
         return present;
     }
 
@@ -316,7 +339,7 @@ public:
      * Get prefix length.
      * @return prefix length
      */
-    uint32_t getPrefixLen() const {
+    uint32_t getPrefixLen() {
         return prefix_len;
     }
 
@@ -507,6 +530,26 @@ public:
     boost::optional<uint32_t> getVnidForGroup(const opflex::modb::URI& eg);
 
     /**
+     * Get the virtual-network identifier (vnid) associated with the
+     * specified endpoint group's bridge domain.
+     *
+     * @param eg the URI for the endpoint group
+     * @return vnid of the group if group is found and its vnid is set,
+     * boost::none otherwise
+     */
+    boost::optional<uint32_t> getBDVnidForGroup(const opflex::modb::URI& eg);
+
+    /**
+     * Get the virtual-network identifier (vnid) associated with the
+     * specified endpoint group's routing domain.
+     *
+     * @param eg the URI for the endpoint group
+     * @return vnid of the group if group is found and its vnid is set,
+     * boost::none otherwise
+     */
+    boost::optional<uint32_t> getRDVnidForGroup(const opflex::modb::URI& eg);
+
+    /**
      * Get the endpoint group associated with the specified identifier
      *
      * @param vnid the VNID to look up
@@ -523,6 +566,24 @@ public:
      */
     boost::optional<std::string>
     getMulticastIPForGroup(const opflex::modb::URI& eg);
+
+    /**
+     * Get the multicast IP group configured for an endpoint group.
+     *
+     * @param eg the URI for the endpoint group
+     * @return Multicast IP for the group if any, boost::none otherwise
+     */
+    boost::optional<std::string>
+    getBDMulticastIPForGroup(const opflex::modb::URI& eg);
+
+    /**
+     * Get the multicast IP group configured for an endpoint group.
+     *
+     * @param eg the URI for the endpoint group
+     * @return Multicast IP for the group if any, boost::none otherwise
+     */
+    boost::optional<std::string>
+    getRDMulticastIPForGroup(const opflex::modb::URI& eg);
 
     /**
      * Get the sclass or source pctag for an endpoint group.
@@ -543,6 +604,24 @@ public:
     getBDVnidForExternalInterface(const opflex::modb::URI& eg);
 
     /**
+     * Get the external bd for an external interface.
+     *
+     * @param eg the URI for the external interface
+     * @return bd for the external interface if any, boost::none otherwise
+     */
+    boost::optional<std::shared_ptr<modelgbp::gbp::ExternalL3BridgeDomain>>
+    getBDForExternalInterface(const opflex::modb::URI& eg);
+
+    /**
+     * Get the rdvnid for an external interface.
+     *
+     * @param eg the URI for the external interface
+     * @return rd vnid for the external interface if any, boost::none otherwise
+     */
+    boost::optional<uint32_t>
+    getRDVnidForExternalInterface(const opflex::modb::URI& eg);
+
+    /**
      * Get the rd for an external interface.
      *
      * @param eg the URI for the external interface
@@ -561,6 +640,17 @@ public:
                             /* out */ subnet_vector_t& subnets);
 
     /**
+     * Get the multicastIP associated with the external BD of an
+     * external interface.
+     *
+     * @param eg the URI for the external interface
+     * @return multicast IP for the external interface if any,
+     * boost::none otherwise
+     */
+    boost::optional<std::string> getBDMulticastIPForExternalInterface(
+        const opflex::modb::URI& eg);
+
+    /**
      * Get the sclass associated with the external BD of an
      * external interface.
      *
@@ -572,6 +662,17 @@ public:
     getSclassForExternalInterface(const opflex::modb::URI& eg);
 
     /**
+     * Get the external domain associated with an
+     * external interface.
+     *
+     * @param eg the URI for the external interface
+     * @return external domain for the external interface if any,
+     * boost::none otherwise
+     */
+    boost::optional<std::shared_ptr<modelgbp::gbp::L3ExternalDomain>>
+        getExternalDomainForExternalInterface(const opflex::modb::URI& eg);
+
+    /**
      * Get sclass associated with an external network (external epg).
      *
      * @param en the URI for the external network
@@ -580,6 +681,22 @@ public:
      */
     boost::optional<uint32_t> getSclassForExternalNet(
         const opflex::modb::URI& en);
+
+    /**
+     * Get the L2EPRetention Policy for an endpoint group.
+     *
+     * @param eg the URI for the endpoint group
+     * @return EP retention policy for the epg if any, boost::none otherwise
+     */
+    boost::optional<std::shared_ptr<modelgbp::gbpe::EndpointRetention>>getL2EPRetentionPolicyForGroup(const opflex::modb::URI& eg );
+
+    /**
+     * Get the L3EPRetention Policy for an endpoint group.
+     *
+     * @param eg the URI for the endpoint group
+     * @return EP retention policy for the epg if any, boost::none otherwise
+     */
+    boost::optional<std::shared_ptr<modelgbp::gbpe::EndpointRetention>>getL3EPRetentionPolicyForGroup(const opflex::modb::URI& eg );
 
     /**
      * Check if an endpoint group exists
@@ -788,6 +905,7 @@ private:
     };
 
     struct ExternalInterfaceState {
+        boost::optional<std::shared_ptr<modelgbp::gbp::ExternalInterface> > extInterface;
         boost::optional<std::shared_ptr<modelgbp::gbpe::InstContext> > instContext;
         boost::optional<std::shared_ptr<modelgbp::gbpe::InstContext> > instRDContext;
         boost::optional<std::shared_ptr<modelgbp::gbp::RoutingDomain> > routingDomain;
@@ -887,6 +1005,8 @@ private:
 
     DomainListener domainListener;
 
+    friend class DomainListener;
+
     /**
      * Set of URIs in sorted order.
      */
@@ -947,6 +1067,8 @@ private:
     };
     ContractListener contractListener;
 
+    friend class ContractListener;
+
     /**
      * Listener for changes related to policy objects.
      */
@@ -961,6 +1083,8 @@ private:
         PolicyManager& pmanager;
     };
     SecGroupListener secGroupListener;
+
+    friend class SecGroupListener;
 
     /**
      * Listener for changes related to plaform config.
@@ -977,6 +1101,8 @@ private:
     };
     ConfigListener configListener;
 
+    friend class ConfigListener;
+
     /**
      * Listener for changes related to routes.
      */
@@ -991,6 +1117,8 @@ private:
         PolicyManager& pmanager;
     };
     RouteListener routeListener;
+
+    friend class RouteListener;
 
     /**
      * The policy listeners that have been registered
@@ -1170,6 +1298,7 @@ private:
     struct RedirectDestGrpState {
         uint8_t resilientHashEnabled;
         uint8_t hashAlgo;
+        std::shared_ptr<modelgbp::gbp::RedirectDestGroup> redirDstGrp;
         redir_dest_list_t redirDstList;
         uri_set_t ctrctSet;
     };

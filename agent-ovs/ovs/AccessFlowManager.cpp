@@ -97,7 +97,6 @@ void AccessFlowManager::start() {
     agent.getEndpointManager().registerListener(this);
     agent.getLearningBridgeManager().registerListener(this);
     agent.getPolicyManager().registerListener(this);
-    agent.getExtraConfigManager().registerListener(this);
 
     for (size_t i = 0; i < sizeof(ID_NAMESPACES)/sizeof(char*); i++) {
         idGen.initNamespace(ID_NAMESPACES[i]);
@@ -172,12 +171,6 @@ static FlowEntryPtr flowEmptySecGroup(uint32_t emptySecGrpSetId) {
     return noSecGrp.build();
 }
 
-static const uint64_t getPushVlanMeta(std::shared_ptr<const Endpoint>& ep) {
-    return ep->isAccessAllowUntagged() ?
-        flow::meta::access_out::UNTAGGED_AND_PUSH_VLAN :
-        flow::meta::access_out::PUSH_VLAN;
-}
-
 static void flowBypassDhcpRequest(FlowEntryList& el, bool v4,
                                   bool skip_pop_vlan, uint32_t inport,
                                   uint32_t outport,
@@ -234,7 +227,8 @@ static void flowBypassFloatingIP(FlowEntryList& el, uint32_t inport,
         if (in) {
             fb.action()
                 .reg(MFF_REG5, ep->getAccessIfaceVlan().get())
-                .metadata(getPushVlanMeta(ep), flow::meta::out::MASK);
+                .metadata(flow::meta::access_out::PUSH_VLAN,
+                          flow::meta::out::MASK);
         } else {
             fb.vlan(ep->getAccessIfaceVlan().get());
             fb.action()
@@ -262,13 +256,6 @@ void AccessFlowManager::createStaticFlows() {
             .action()
             .popVlan().outputReg(MFF_REG7)
             .parent().build(outFlows);
-        FlowBuilder()
-            .priority(1)
-            .metadata(flow::meta::access_out::PUSH_VLAN,
-                      flow::meta::out::MASK)
-            .action()
-            .pushVlan().regMove(MFF_REG5, MFF_VLAN_VID).outputReg(MFF_REG7)
-            .parent().build(outFlows);
         /*
          * The packet is replicated for a specical case of
          * Openshift bootstrap that does not use vlan 4094
@@ -279,7 +266,7 @@ void AccessFlowManager::createStaticFlows() {
          */
         FlowBuilder()
             .priority(1)
-            .metadata(flow::meta::access_out::UNTAGGED_AND_PUSH_VLAN,
+            .metadata(flow::meta::access_out::PUSH_VLAN,
                       flow::meta::out::MASK)
             .action()
             .outputReg(MFF_REG7)
@@ -407,7 +394,7 @@ void AccessFlowManager::handleEndpointUpdate(const string& uuid) {
         /*
          * We allow without tags to handle Openshift bootstrap
          */
-        if (ep->isAccessAllowUntagged() && ep->getAccessIfaceVlan()) {
+        if (ep->getAccessIfaceVlan()) {
             FlowBuilder inSkipVlan;
 
             inSkipVlan.priority(99).inPort(accessPort)
@@ -433,7 +420,7 @@ void AccessFlowManager::handleEndpointUpdate(const string& uuid) {
         if (v4c) {
             flowBypassDhcpRequest(el, true, false, accessPort,
                                   uplinkPort, ep);
-            if (ep->isAccessAllowUntagged() && ep->getAccessIfaceVlan())
+            if (ep->getAccessIfaceVlan())
                 flowBypassDhcpRequest(el, true, true, accessPort,
                                       uplinkPort, ep);
         }
@@ -442,7 +429,7 @@ void AccessFlowManager::handleEndpointUpdate(const string& uuid) {
         if(v6c) {
             flowBypassDhcpRequest(el, false, false, accessPort,
                                   uplinkPort, ep);
-            if (ep->isAccessAllowUntagged() && ep->getAccessIfaceVlan())
+            if (ep->getAccessIfaceVlan())
                 flowBypassDhcpRequest(el, false, true, accessPort,
                                       uplinkPort, ep);
         }
@@ -460,7 +447,8 @@ void AccessFlowManager::handleEndpointUpdate(const string& uuid) {
             if (ep->getAccessIfaceVlan()) {
                 out.action()
                     .reg(MFF_REG5, ep->getAccessIfaceVlan().get())
-                    .metadata(getPushVlanMeta(ep), flow::meta::out::MASK);
+                    .metadata(flow::meta::access_out::PUSH_VLAN,
+                              flow::meta::out::MASK);
             }
             out.action().go(SEC_GROUP_IN_TABLE_ID);
             out.build(el);
@@ -509,7 +497,7 @@ void AccessFlowManager::handleEndpointUpdate(const string& uuid) {
              * We allow both with / without tags to handle Openshift
              * bootstrap
              */
-            if (ep->isAccessAllowUntagged() && ep->getAccessIfaceVlan()) {
+            if (ep->getAccessIfaceVlan()) {
                 flowBypassFloatingIP(el, accessPort, uplinkPort, false,
                                      true, floatingIp, ep);
                 flowBypassFloatingIP(el, uplinkPort, accessPort, true,
@@ -592,19 +580,13 @@ void AccessFlowManager::handleSecGrpSetUpdate(const uri_set_t& secGrps,
 
         for (shared_ptr<PolicyRule>& pc : rules) {
             uint8_t dir = pc->getDirection();
-            bool skipL34 = false;
             const shared_ptr<L24Classifier>& cls = pc->getL24Classifier();
             const URI& ruleURI = cls.get()->getURI();
             uint64_t secGrpCookie =
                 idGen.getId("l24classifierRule", ruleURI.toString());
             boost::optional<const network::subnets_t&> remoteSubs;
-            if (!pc->getRemoteSubnets().empty()) {
+            if (!pc->getRemoteSubnets().empty())
                 remoteSubs = pc->getRemoteSubnets();
-            } else {
-                skipL34 = !agent.addL34FlowsWithoutSubnet();
-                LOG(DEBUG) << "skipL34 flows: " << skipL34
-                           << " for rule: " << ruleURI;
-            }
 
             flowutils::ClassAction act = flowutils::CA_DENY;
             if (pc->getAllow()) {
@@ -614,35 +596,6 @@ void AccessFlowManager::handleSecGrpSetUpdate(const uri_set_t& secGrps,
                 } else {
                     act = CA_ALLOW;
                 }
-            }
-
-            /*
-             * Do not program higher level protocols
-             * when remote subnet is missing
-             * except when agent.addL34FlowsWithoutSubnet() == true
-             */
-            if (skipL34) {
-                if (dir == DirectionEnumT::CONST_BIDIRECTIONAL ||
-                    dir == DirectionEnumT::CONST_IN) {
-                    flowutils::add_l2classifier_entries(*cls, act,
-                                                        OUT_TABLE_ID,
-                                                        pc->getPriority(),
-                                                        OFPUTIL_FF_SEND_FLOW_REM,
-                                                        secGrpCookie,
-                                                        secGrpSetId, 0,
-                                                        secGrpIn);
-                }
-                if (dir == DirectionEnumT::CONST_BIDIRECTIONAL ||
-                    dir == DirectionEnumT::CONST_OUT) {
-                    flowutils::add_l2classifier_entries(*cls, act,
-                                                        OUT_TABLE_ID,
-                                                        pc->getPriority(),
-                                                        OFPUTIL_FF_SEND_FLOW_REM,
-                                                        secGrpCookie,
-                                                        secGrpSetId, 0,
-                                                        secGrpOut);
-                }
-                continue;
             }
 
             if (dir == DirectionEnumT::CONST_BIDIRECTIONAL ||

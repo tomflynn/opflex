@@ -65,10 +65,8 @@ public:
      *
      * @param exposeLocalHostOnly     flag to indicate if the the exposer
      *                                should be bound with local host only.
-     * @param exposeEpSvcNan          flag to indicate if Nan ep<-->svc
-     *                                metrics need to be exposed.
      */
-    void start(bool exposeLocalHostOnly, bool exposeEpSvcNan);
+    void start(bool exposeLocalHostOnly);
     /**
      * Stop the prometheus manager
      */
@@ -120,13 +118,7 @@ public:
      * @param tx_pkts         egress packets
      * @param svc_attr_map    map of svc attributes
      * @param ep_attr_map     map of ep/pod attributes
-<<<<<<< HEAD
      * @param updateLabels    update label annotations during cfg updates
-=======
-     * @param createIfNotPresent  Create new metrics only if this flag is set
-     * @param updateLabels    update label annotations during cfg updates
-     * @param isNodePort      true if the metric is for nodePort svc
->>>>>>> origin/master
      */
     void addNUpdateSvcTargetCounter(const string& uuid,
                                     const string& nhip,
@@ -136,13 +128,7 @@ public:
                                     uint64_t tx_pkts,
         const unordered_map<string, string>& svc_attr_map,
         const unordered_map<string, string>& ep_attr_map,
-<<<<<<< HEAD
                                     bool updateLabels);
-=======
-                                    bool createIfNotPresent,
-                                    bool updateLabels,
-                                    bool isNodePort=false);
->>>>>>> origin/master
     /**
      * Remove SvcTargetCounter metrics given it's uuid
      *
@@ -163,22 +149,13 @@ public:
      * @param tx_bytes        egress bytes
      * @param tx_pkts         egress packets
      * @param svc_attr_map    map of all svc attributes
-<<<<<<< HEAD
-=======
-     * @param isNodePort      true if the metric is for nodePort svc
->>>>>>> origin/master
      */
     void addNUpdateSvcCounter(const string& uuid,
                               uint64_t rx_bytes,
                               uint64_t rx_pkts,
                               uint64_t tx_bytes,
                               uint64_t tx_pkts,
-<<<<<<< HEAD
         const unordered_map<string, string>& svc_attr_map);
-=======
-        const unordered_map<string, string>& svc_attr_map,
-                              bool isNodePort=false);
->>>>>>> origin/master
     /**
      * Remove SvcCounter metrics given it's uuid
      *
@@ -193,15 +170,11 @@ public:
      *
      * @param isEpToSvc       true if EpToSvc reporting
      * @param uuid            uuid of POD+SVC
-     * @param bytes           new byte count
-     * @param pkts            new packet count
      * @param ep_attr_map     map of all ep attributes
      * @param svc_attr_map    map of all svc attributes
      */
     void addNUpdatePodSvcCounter(bool isEpToSvc,
                                  const string& uuid,
-                                 uint64_t bytes,
-                                 uint64_t pkts,
         const unordered_map<string, string>& ep_attr_map,
         const unordered_map<string, string>& svc_attr_map);
     /**
@@ -249,13 +222,9 @@ public:
      *
      * @param rdURI       URI of routing domain
      * @param isAdd       flag to indicate if its create or update
-     * @param bytes       delta byte count
-     * @param pkts        delta packet count
      */
     void addNUpdateRDDropCounter(const string& rdURI,
-                                 bool isAdd,
-                                 uint64_t bytes,
-                                 uint64_t pkts);
+                                 bool isAdd);
     /**
      * Remove RDDropCounter metric given URI of routing domain
      *
@@ -300,16 +269,8 @@ public:
      * Update SGClassifierCounter metric family if its already present
      *
      * @param classifier       name of the classifier
-     * @param rx_bytes         delta rx byte count
-     * @param rx_pkts          delta rx packet count
-     * @param tx_bytes         delta tx byte count
-     * @param tx_pkts          delta tx packet count
      */
-    void addNUpdateSGClassifierCounter(const string& classifier,
-                                       uint64_t rx_bytes,
-                                       uint64_t rx_pkts,
-                                       uint64_t tx_bytes,
-                                       uint64_t tx_pkts);
+    void addNUpdateSGClassifierCounter(const string& classifier);
     /**
      * Remove SGClassifierCounter metric given the classifier
      *
@@ -326,14 +287,10 @@ public:
      * @param srcEpg           name of the srcEpg
      * @param dstEpg           name of the dstEpg
      * @param classifier       name of the classifier
-     * @param bytes            delta byte count
-     * @param pkts             delta packet count
      */
     void addNUpdateContractClassifierCounter(const string& srcEpg,
                                              const string& dstEpg,
-                                             const string& classifier,
-                                             uint64_t bytes,
-                                             uint64_t pkts);
+                                             const string& classifier);
     /**
      * Remove ContractClassifierCounter metric given the classifier
      *
@@ -546,13 +503,7 @@ private:
                                      const string& nhip,
         const unordered_map<string, string>& svc_attr_map,
         const unordered_map<string, string>& ep_attr_map,
-<<<<<<< HEAD
                                      bool updateLabels);
-=======
-                                     bool createIfNotPresent,
-                                     bool updateLabels,
-                                     bool isNodePort);
->>>>>>> origin/master
 
     // func to get label map and Gauge for SvcTargetCounter given metric type, uuid
     mgauge_pair_t getDynamicGaugeSvcTarget(SVC_TARGET_METRICS metric, const string& uuid);
@@ -574,12 +525,7 @@ private:
     static const map<string,string> createLabelMapFromSvcTargetAttr(
                                                           const string& nhip,
                            const unordered_map<string, string>&  svc_attr_map,
-<<<<<<< HEAD
                            const unordered_map<string, string>&  ep_attr_map);
-=======
-                           const unordered_map<string, string>&  ep_attr_map,
-                           bool isNodePort);
->>>>>>> origin/master
     /* End of SvcTargetCounter related apis and state */
 
 
@@ -643,12 +589,7 @@ private:
     // uuid of svc & attr map of svc
     void createDynamicGaugeSvc(SVC_METRICS metric,
                                const string& uuid,
-<<<<<<< HEAD
         const unordered_map<string, string>& svc_attr_map);
-=======
-        const unordered_map<string, string>& svc_attr_map,
-                               bool isNodePort);
->>>>>>> origin/master
 
     // func to get label map and Gauge for SvcCounter given metric type, uuid
     mgauge_pair_t getDynamicGaugeSvc(SVC_METRICS metric, const string& uuid);
@@ -668,12 +609,7 @@ private:
     //Utility apis
     // Create a label map that can be used for annotation, given the svc attr map
     static const map<string,string> createLabelMapFromSvcAttr(
-<<<<<<< HEAD
                            const unordered_map<string, string>&  svc_attr_map);
-=======
-                           const unordered_map<string, string>&  svc_attr_map,
-                           bool isNodePort);
->>>>>>> origin/master
     /* End of SvcCounter related apis and state */
 
 
@@ -874,6 +810,11 @@ private:
     // func to remove all gauges of every RDDropCounter
     void removeDynamicGaugeRDDrop(void);
 
+    // RDDropCounter diffs are stored in a circular buffer. Each buffer element
+    // has a unique running genID. Keep track of the last processed genId by
+    // PrometheusManager to avoid double counting
+    uint64_t rddrop_last_genId;
+
     /**
      * cache Gauge ptr for every RDDropCounter metric
      */
@@ -968,6 +909,11 @@ private:
     // func to remove all gauges of every SGClassifierCounter
     void removeDynamicGaugeSGClassifier(void);
 
+    // SGClassifierCounter diffs are stored in a circular buffer. Each buffer element
+    // has a unique running genID. Keep track of the last processed genId by
+    // PrometheusManager to avoid double counting
+    uint64_t sgclassifier_last_genId;
+
     /**
      * cache Gauge ptr for every SGClassifierCounter metric
      */
@@ -1031,6 +977,11 @@ private:
     // func to remove all gauges of every ContractClassifierCounter
     void removeDynamicGaugeContractClassifier(void);
 
+    // ContractClassifierCounter diffs are stored in a circular buffer. Each buffer element
+    // has a unique running genID. Keep track of the last processed genId by
+    // PrometheusManager to avoid double counting
+    uint64_t contract_last_genId;
+
     /**
      * cache Gauge ptr for every ContractClassifierCounter metric
      */
@@ -1047,10 +998,7 @@ private:
      * True if shutting down or not start()'ed
      */
     std::atomic<bool> disabled;
-    /**
-     * True if Nan ep<-->svc metrics can be exposed
-     */
-    std::atomic<bool> exposeEpSvcNan;
+
     /* TODO: Other Counter related apis and state */
 };
 

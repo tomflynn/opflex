@@ -51,7 +51,6 @@ MockFlowExecutor::MockFlowExecutor()
     : ignoreFlowMods(true), ignoreGroupMods(true), ignoreTlvMods(true) {}
 
 bool MockFlowExecutor::Execute(const FlowEdit& flowEdits) {
-    std::lock_guard<std::mutex> guard(flow_mod_mutex);
     if (ignoreFlowMods) return true;
 
     FlowEdit editCopy = flowEdits;
@@ -122,12 +121,10 @@ bool MockFlowExecutor::Execute(const TlvEdit& TlvEdits) {
     return true;
 }
 void MockFlowExecutor::Expect(FlowEdit::type mod, const string& fe) {
-    std::lock_guard<std::mutex> guard(flow_mod_mutex);
     ignoreFlowMods = false;
     flowMods.push_back(mod_t(mod, fe));
 }
 void MockFlowExecutor::Expect(FlowEdit::type mod, const vector<string>& fe) {
-    std::lock_guard<std::mutex> guard(flow_mod_mutex);
     ignoreFlowMods = false;
     for (const string& s : fe)
         flowMods.push_back(mod_t(mod, s));
@@ -148,7 +145,6 @@ void MockFlowExecutor::IgnoreTlvMods() {
     tlvMods.clear();
 }
 void MockFlowExecutor::IgnoreFlowMods() {
-    std::lock_guard<std::mutex> guard(flow_mod_mutex);
     ignoreFlowMods = true;
     flowMods.clear();
 }
@@ -157,24 +153,16 @@ void MockFlowExecutor::IgnoreGroupMods() {
     ignoreGroupMods = true;
     groupMods.clear();
 }
-bool MockFlowExecutor::IsEmpty() {
-    std::lock_guard<std::mutex> guard(flow_mod_mutex);
-    return flowMods.empty() || ignoreFlowMods;
-}
+bool MockFlowExecutor::IsEmpty() { return flowMods.empty() || ignoreFlowMods; }
 bool MockFlowExecutor::IsGroupEmpty() {
     std::lock_guard<std::mutex> guard(group_mod_mutex);
     return groupMods.empty() || ignoreGroupMods;
 }
 bool MockFlowExecutor::IsTlvEmpty() { return tlvMods.empty() || ignoreTlvMods; }
 void MockFlowExecutor::Clear() {
-    {
-        std::lock_guard<std::mutex> guard(flow_mod_mutex);
-        flowMods.clear();
-    }
-    {
-        std::lock_guard<std::mutex> guard(group_mod_mutex);
-        groupMods.clear();
-    }
+    std::lock_guard<std::mutex> guard(group_mod_mutex);
+    flowMods.clear();
+    groupMods.clear();
     tlvMods.clear();
 }
 

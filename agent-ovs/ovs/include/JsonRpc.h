@@ -25,7 +25,6 @@
 #include <thread>
 #include <rapidjson/document.h>
 #include "OvsdbConnection.h"
-#include <opflexagent/SpanSessionState.h>
 #include <opflexagent/logging.h>
 
 #include <boost/optional.hpp>
@@ -40,7 +39,7 @@ using namespace std::chrono;
 /*
  * name of ERPSAN port
  */
-static const string ERSPAN_PORT_PREFIX("erspan");
+static const string ERSPAN_PORT_NAME("erspan");
 
 /**
  * helper function to get Value of a given index
@@ -55,7 +54,73 @@ void getValue(const Document& val, const list<string>& idx, Value& result);
  */
 class JsonRpc : public Transaction {
 public:
+    /**
+     * base struct for ERSPAN interface parameters
+     */
+    typedef struct erspan_ifc_ {
+        /**
+         * ERSPAN version
+         */
+        int erspan_ver;
+        /**
+         * name of ERSPAN port
+         */
+        string name;
+        /**
+         * ERSPAN key
+         * maps to ERSPAN session ID/Span ID
+         */
+        int key;
+        /**
+         * destination IP address
+         */
+        string remote_ip;
+    } erspan_ifc;
 
+    /**
+     * ERSPAN type II struct
+     */
+    typedef struct erspan_ifc_v1_ : erspan_ifc {
+        /**
+         * constructor
+         * ERSPAN version 1 maps to ERSPAN type 2
+         */
+        erspan_ifc_v1_() {
+            erspan_ver = 1;
+            erspan_idx = 0;
+        }
+        /**
+         * ERSPAN index
+         * This field is a 20-bit index/port number associated with the ERSPAN traffic's
+         * source port and direction (ingress/egress). This field is platform dependent.
+         */
+        int erspan_idx;
+    } erspan_ifc_v1;
+
+    /**
+     * ERSPAN type III struct
+     */
+    typedef struct erspan_ifc_v2_ : erspan_ifc {
+        /**
+         * constructor
+         * ERSPAN version 2 maps to ERSPAN type 3.
+         */
+        erspan_ifc_v2_() {
+            erspan_ver = 2;
+            erspan_hw_id = 0;
+            erspan_dir = 0;
+        }
+        /**
+         * ERSPAN hardware ID
+         * A 6-bit unique identifier of an ERSPAN v2 engine within a system.
+         */
+        int erspan_hw_id;
+        /**
+         * ERSPAN direction
+         * the mirrored traffic's direction: 0 for ingress traffic, 1 for egress traffic.
+         */
+        int erspan_dir;
+    } erspan_ifc_v2;
 
     /**
      * struct for managing mirror data
@@ -65,6 +130,10 @@ public:
          * UUID of the mirror
          */
         string uuid;
+        /**
+         * UUID of the bridge
+         */
+        string brUuid;
         /**
          * set of source port UUIDs
          */
@@ -76,7 +145,7 @@ public:
         /**
          * set of erspan ports
          */
-        string out_port;
+        set<string> out_ports;
     } mirror;
 
     /**
@@ -114,12 +183,21 @@ public:
 
     /**
      * update the port list for the bridge
-     * @param[in] brUuid bridge UUID
-     * @param[in] portUuid port UUID to be added or removed.
-     * @param[in] addToList true: add port, false: remove port.
+     * @param[in] ports a tuple of bridge name a port UUIDs
+     * @param[in] port port UUID to be added or removed.
+     * @param[in] action true: add port, false: remove port.
      * @return bool true if update succeeded, false otherwise.
      */
-    bool updateBridgePorts(const string& brUuid, const string& portUuid, bool addToList);
+    bool updateBridgePorts(tuple<string,set<string>> ports,
+                const string& port, bool action);
+
+    /**
+     * sends request to get port list of the bridge
+     * @param[in] bridge name of bridge
+     * @param[out] result bridge and port UUIDs
+     * @return bool true if successful, false otherwise
+     */
+    bool getBridgePortList(const string& bridge, BrPortResult& result);
 
     /**
      * get the UUID of the port
@@ -136,12 +214,10 @@ public:
     /**
      * create mirror
      * @param[in] uuid uuid of the bridge to add the mirror to.
-     * @param[in] name name of mirror
-     * @param[in] srcPorts source ports
-     * @param[in] dstPorts dest ports
+     * @param[in]  name name of mirror
      * @return bool true if created successfully, false otherwise.
      */
-    bool createMirror(const string& uuid, const string& name, const set<string>& srcPorts, const set<string>& dstPorts);
+    bool createMirror(const string& uuid, const string& name);
 
     /**
      * get port uuids from OVSDB
@@ -154,10 +230,9 @@ public:
     /**
      * deletes mirror on OVSDB bridge.
      * @param[in] brName name of bridge that the mirror is associated with
-     * @param[in] sessionName Session to delete
      * @return true if success, false otherwise.
      */
-    bool deleteMirror(const string& brName, const string& sessionName);
+    bool deleteMirror(const string& brName);
 
     /**
      * get uuid of bridge from OVSDB
@@ -167,29 +242,30 @@ public:
     void getBridgeUuid(const string& name, string& uuid);
 
     /**
-     * get uuid of the named mirror from OVSDB
-     * @param[in] name name of mirror
-     * @param[out] uuid of the mirror or empty
-     */
-    void getMirrorUuid(const string& name, string& uuid);
-
-    /**
      * read port uuids from the map and insert into list
      * @param[in] ports set of port names
      * @param[in] uuidMap map of port names to uuids
      * @param[out] entries list of port uuids
      */
-    static void populatePortUuids(const set<string>& ports, const map<string, string>& uuidMap, set<tuple<string, string>>& entries);
+    static void populatePortUuids(set<string>& ports, map<string,
+                string>& uuidMap, set<tuple<string, string>>& entries);
 
     /**
      * add an erspan port to the bridge
      * @param[in] bridgeName name of bridge to add the port to
-     * @param[in] params ERSPAN params
+     * @param[in] port erspan_ifc struct
      * @return true if success, false otherwise
      */
-    bool addErspanPort(const string& bridgeName, ErspanParams& params);
+    bool addErspanPort(const string& bridgeName, shared_ptr<erspan_ifc> port);
 
     /**
+     * add mirror data to in memory struct
+     * @param[in] name name of mirror
+     * @param[in] mir struct mirror
+     */
+    void addMirrorData(const string& name, const mirror& mir);
+
+     /**
      * createNetFlow
      * @param[in] brUuid uuid of the bridge to add the netflow to.
      * @param[in] target target of netflow
@@ -236,9 +312,20 @@ public:
      * process bridge port list response
      * @param[in] reqId request ID
      * @param[in] payload body of the response
+     * @param[out] brPtr shared pointer to result struct
+     * @return true id success, false otherwise
+     */
+    static bool handleGetBridgePortList(uint64_t reqId, const rapidjson::Document& payload,
+            shared_ptr<BrPortResult>& brPtr);
+
+    /**
+     * process bridge port list response
+     * @param[in] reqId request ID
+     * @param[in] payload body of the response
      * @param[out] uuid of the bridge
      */
-    static void handleGetUuidResp(uint64_t reqId, const rapidjson::Document& payload, string& uuid);
+    static void handleGetBridgeUuidResp(uint64_t reqId, const rapidjson::Document& payload,
+            string& uuid);
 
     /**
      * process mirror config
@@ -252,11 +339,10 @@ public:
 
     /**
      * get the mirror config from OVSDB.
-     * @param[in] sessionName session name
      * @param[out] mir struct to hold mirror data
      * @return bool true if retrieval succeeded, false otherwise.
      */
-    bool getOvsdbMirrorConfig(const string& sessionName, mirror& mir);
+    bool getOvsdbMirrorConfig(mirror& mir);
 
     /**
      * process bridge port list response
@@ -268,11 +354,10 @@ public:
 
     /**
      * get ERSPAN interface parameters from OVSDB
-     * @param[in] portName ERSPAN port name
-     * @param[out] params erspan interface struct
+     * @param[out] pIfc empty shared pointer reference to erspan interface struct
      * @return true if success, false otherwise
      */
-    bool getCurrentErspanParams(const string& portName, ErspanParams& params);
+    bool getErspanIfcParams(shared_ptr<erspan_ifc>& pIfc);
 
     /**
      * check if connection has been established
@@ -285,7 +370,14 @@ public:
      */
     OvsdbConnection* getConnection() { return conn; }
 
+    /**
+     * set the next request ID
+     * @param id_ request id
+     */
+    void setNextId(uint64_t id_) { id = id_;}
+
 private:
+    uint64_t getNextId() { return ++id; }
 
     /**
      * get UUIDs from a Value struct. Can handle both a single uuid two tuple
@@ -309,21 +401,21 @@ private:
      * get ERSPAN interface options from Value struct
      * @param[in] reqId request ID
      * @param[in] payload response Value struct
-     * @param[out] pararms ERSPAN session params
+     * @param[out] pIfc empty shared pointer to ERSPAN
      * interface struct
      */
-    static bool getErspanOptions(const uint64_t reqId, const Document& payload, ErspanParams& params);
+    static bool getErspanOptions(const uint64_t reqId, const Document& payload, shared_ptr<erspan_ifc>& pIfc);
 
     template <typename T>
-    inline bool sendRequestAndAwaitResponse(const list<T> &tl) {
-        unique_lock<mutex> lock(OvsdbConnection::ovsdbMtx);
+    inline bool sendRequestAndAwaitResponse(const list<T>& tl, uint64_t reqId) {
+        unique_lock<mutex> lock(conn->mtx);
         if (!conn->ready.wait_for(lock, milliseconds(WAIT_TIMEOUT*1000),
                 [=]{return conn->isConnected();})) {
             LOG(DEBUG) << "lock timed out";
             return false;
         }
         responseReceived = false;
-        conn->sendTransaction(tl, this);
+        conn->sendTransaction(reqId, tl, this);
 
         if (!conn->ready.wait_for(lock, milliseconds(WAIT_TIMEOUT*1000),
                                    [=]{return responseReceived;})) {
@@ -335,6 +427,11 @@ private:
     }
 
     static void substituteSet(set<string>& s, const unordered_map<string, string>& portMap);
+
+    /**
+     * print mirror map values
+     */
+    static void printMirMap(const map<string, mirror>& mirMap);
 
     class Response {
     public:
@@ -348,9 +445,11 @@ private:
     };
 
     bool responseReceived = false;
+    map<string, mirror> mirMap;
     const int WAIT_TIMEOUT = 10;
     OvsdbConnection* conn;
     shared_ptr<Response> pResp;
+    uint64_t id = 0;
 };
 
 }

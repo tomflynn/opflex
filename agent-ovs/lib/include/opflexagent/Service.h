@@ -33,7 +33,7 @@ public:
     /**
      * Default constructor
      */
-    Service() : serviceMode(LOCAL_ANYCAST), serviceType(CLUSTER_IP) {}
+    Service() : serviceMode(LOCAL_ANYCAST) {}
 
     /**
      * Construct a new Service with the given uuid.
@@ -41,7 +41,7 @@ public:
      * @param uuid_ the unique ID for the service.
      */
     explicit Service(const std::string& uuid_)
-        : uuid(uuid_), serviceMode(LOCAL_ANYCAST), serviceType(CLUSTER_IP) {}
+        : uuid(uuid_), serviceMode(LOCAL_ANYCAST) {}
 
     /**
      * Get the UUID for this service
@@ -231,49 +231,15 @@ public:
     }
 
     /**
-     * Types of service
-     */
-    enum ServiceType {
-        CLUSTER_IP,
-        NODE_PORT,
-        LOAD_BALANCER
-    };
-
-    /**
-     * Set the service type
+     * Check if the scope is external
      *
-     * @param serviceType the new value for the service type
-     */
-    void setServiceType(ServiceType serviceType) {
-        this->serviceType = serviceType;
-    }
-
-    /**
-     * Get the service type
-     *
-     * @return the service type
-     */
-    ServiceType getServiceType() const {
-        return serviceType;
-    }
-
-    /**
-     * Check if service type is "loadBalancer"
-     *
-     * @return returns true if type is external LB
+     * @return returns true if the scope is external
      */
     bool isExternal (void) const {
-        return (getServiceType() == LOAD_BALANCER);
-    }
-
-    /**
-     * Check if there is a nodePort configured
-     *
-     * @return returns true if there is a nodePort under SM
-     */
-    bool isNodePort (void) const {
-        for (const auto& sm : getServiceMappings())
-            if (sm.getNodePort())
+        const Service::attr_map_t& svcAttr = getAttributes();
+        auto scopeItr = svcAttr.find("scope");
+        if (scopeItr != svcAttr.end())
+            if (scopeItr->second == "ext")
                 return true;
         return false;
     }
@@ -451,29 +417,6 @@ public:
         }
 
         /**
-         * @return the node port number
-         */
-        const boost::optional<uint16_t>& getNodePort() const {
-            return nodePort;
-        }
-
-        /**
-         * Set the node port for the service mapping
-         *
-         * @param nodePort  the node port number
-         */
-        void setNodePort(uint16_t nodePort) {
-            this->nodePort = nodePort;
-        }
-
-        /**
-         * Unset the node port
-         */
-        void unsetNodePort() {
-            nodePort = boost::none;
-        }
-
-        /**
          * Set the connection tracking mode flag to the value
          * specified.  If connection tracking is enabled, reverse flow
          * mapping requires a stateful connection
@@ -501,7 +444,6 @@ public:
         boost::optional<std::string> gatewayIp;
         std::set<std::string> nextHopIps;
         boost::optional<uint16_t> nextHopPort;
-        boost::optional<uint16_t> nodePort;
         bool ctMode;
     };
 
@@ -582,7 +524,6 @@ private:
     boost::optional<opflex::modb::MAC> serviceMac;
     boost::optional<std::string> ifaceIP;
     ServiceMode serviceMode;
-    ServiceType serviceType;
     sm_set serviceMappings;
     attr_map_t attributes;
 };

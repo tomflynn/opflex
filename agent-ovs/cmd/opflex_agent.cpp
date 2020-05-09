@@ -152,7 +152,6 @@ public:
             return;
 
         {
-            LOG(INFO) << "Triggering reload because of change to " << filePath;
             std::unique_lock<std::mutex> lock(mutex);
             need_reload = true;
         }

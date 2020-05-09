@@ -16,7 +16,6 @@
 #include <opflex/modb/Mutator.h>
 #include <modelgbp/svc/ServiceUniverse.hpp>
 #include <modelgbp/svc/ServiceModeEnumT.hpp>
-#include <modelgbp/svc/ServiceTypeEnumT.hpp>
 #include <modelgbp/svc/ConnTrackEnumT.hpp>
 #include <modelgbp/gbpe/EncapTypeEnumT.hpp>
 
@@ -100,34 +99,20 @@ void ServiceManager::removeDomains(const Service& service) {
     }
 }
 
-<<<<<<< HEAD
 void ServiceManager::clearSvcCounterStats (shared_ptr<SvcCounter> pSvc,
-=======
-void ServiceManager::clearSvcCounterStats (const Service& service,
-                                           shared_ptr<SvcCounter> pSvc,
->>>>>>> origin/master
                                            shared_ptr<SvcTargetCounter> pSvcTgt)
 {
     auto stRxPktCount = pSvcTgt->getRxpackets(0);
     auto stRxByteCount = pSvcTgt->getRxbytes(0);
     auto stTxPktCount = pSvcTgt->getTxpackets(0);
     auto stTxByteCount = pSvcTgt->getTxbytes(0);
-    auto stNodePortRxPktCount = pSvcTgt->getNodePortRxpackets(0);
-    auto stNodePortRxByteCount = pSvcTgt->getNodePortRxbytes(0);
-    auto stNodePortTxPktCount = pSvcTgt->getNodePortTxpackets(0);
-    auto stNodePortTxByteCount = pSvcTgt->getNodePortTxbytes(0);
     auto sRxPktCount = pSvc->getRxpackets(0);
     auto sRxByteCount = pSvc->getRxbytes(0);
     auto sTxPktCount = pSvc->getTxpackets(0);
     auto sTxByteCount = pSvc->getTxbytes(0);
-    auto sNodePortRxPktCount = pSvc->getNodePortRxpackets(0);
-    auto sNodePortRxByteCount = pSvc->getNodePortRxbytes(0);
-    auto sNodePortTxPktCount = pSvc->getNodePortTxpackets(0);
-    auto sNodePortTxByteCount = pSvc->getNodePortTxbytes(0);
     pSvc->setRxpackets(sRxPktCount - stRxPktCount)
          .setRxbytes(sRxByteCount - stRxByteCount)
          .setTxpackets(sTxPktCount - stTxPktCount)
-<<<<<<< HEAD
          .setTxbytes(sTxByteCount - stTxByteCount);
 #ifdef HAVE_PROMETHEUS_SUPPORT
     auto svcUuid = pSvc->getUuid();
@@ -138,27 +123,6 @@ void ServiceManager::clearSvcCounterStats (const Service& service,
                                        pSvc->getTxbytes(0),
                                        pSvc->getTxpackets(0),
                                        attr_map_t());
-=======
-         .setTxbytes(sTxByteCount - stTxByteCount)
-         .setNodePortRxpackets(sNodePortRxPktCount - stNodePortRxPktCount)
-         .setNodePortRxbytes(sNodePortRxByteCount - stNodePortRxByteCount)
-         .setNodePortTxpackets(sNodePortTxPktCount - stNodePortTxPktCount)
-         .setNodePortTxbytes(sNodePortTxByteCount - stNodePortTxByteCount);
-#ifdef HAVE_PROMETHEUS_SUPPORT
-    prometheusManager.addNUpdateSvcCounter(service.getUUID(),
-                                   pSvc->getRxbytes(0),
-                                   pSvc->getRxpackets(0),
-                                   pSvc->getTxbytes(0),
-                                   pSvc->getTxpackets(0),
-                                   attr_map_t());
-    if (!service.isExternal() && service.isNodePort()) {
-        prometheusManager.addNUpdateSvcCounter("nodeport-"+service.getUUID(),
-                                       pSvc->getNodePortRxbytes(0),
-                                       pSvc->getNodePortRxpackets(0),
-                                       pSvc->getNodePortTxbytes(0),
-                                       pSvc->getNodePortTxpackets(0),
-                                       attr_map_t(), true);
->>>>>>> origin/master
     }
 #endif
 }
@@ -199,19 +163,7 @@ ServiceManager::updateSvcTargetObserverMoDB (const opflexagent::Service& service
                                                                  0, 0, 0, 0,
                                                                  service.getAttributes(),
                                                                  attr_map_t(),
-<<<<<<< HEAD
                                                                  true);
-=======
-                                                                 true, true);
-                    if (!service.isExternal() && sm.getNodePort()) {
-                        prometheusManager.addNUpdateSvcTargetCounter("nodeport-"+service.getUUID(),
-                                                             ip,
-                                                             0, 0, 0, 0,
-                                                             service.getAttributes(),
-                                                             attr_map_t(),
-                                                             true, true, true);
-                    }
->>>>>>> origin/master
 #endif
                 } else {
                     pSvcTarget = opSvcTarget.get();
@@ -229,24 +181,7 @@ ServiceManager::updateSvcTargetObserverMoDB (const opflexagent::Service& service
                                                                  pSvcTarget->getTxpackets(0),
                                                                  service.getAttributes(),
                                                                  attr_map_t(),
-<<<<<<< HEAD
                                                                  true);
-=======
-                                                                 true, true);
-                    if (!service.isExternal() && sm.getNodePort()) {
-                        prometheusManager.addNUpdateSvcTargetCounter("nodeport-"+service.getUUID(),
-                                                             ip,
-                                                             pSvcTarget->getNodePortRxbytes(0),
-                                                             pSvcTarget->getNodePortRxpackets(0),
-                                                             pSvcTarget->getNodePortTxbytes(0),
-                                                             pSvcTarget->getNodePortTxpackets(0),
-                                                             service.getAttributes(),
-                                                             attr_map_t(),
-                                                             true, true, true);
-                    } else {
-                        prometheusManager.removeSvcTargetCounter("nodeport-"+service.getUUID(), ip);
-                    }
->>>>>>> origin/master
 #endif
                 }
                 for (size_t idx=0; idx < out.size(); idx++) {
@@ -255,17 +190,9 @@ ServiceManager::updateSvcTargetObserverMoDB (const opflexagent::Service& service
                 }
             } else {
                 if (opSvcTarget) {
-<<<<<<< HEAD
                     clearSvcCounterStats(pSvcCounter, opSvcTarget.get());
 #ifdef HAVE_PROMETHEUS_SUPPORT
                     prometheusManager.removeSvcTargetCounter(service.getUUID(), ip);
-=======
-                    clearSvcCounterStats(service, pSvcCounter, opSvcTarget.get());
-#ifdef HAVE_PROMETHEUS_SUPPORT
-                    prometheusManager.removeSvcTargetCounter(service.getUUID(), ip);
-                    if (!service.isExternal() && service.isNodePort())
-                        prometheusManager.removeSvcTargetCounter("nodeport-"+service.getUUID(), ip);
->>>>>>> origin/master
 #endif
                     opSvcTarget.get()->remove();
                 }
@@ -275,22 +202,11 @@ ServiceManager::updateSvcTargetObserverMoDB (const opflexagent::Service& service
 
     // Remove deleted service targets
     for (auto& pSvcTarget : out) {
-<<<<<<< HEAD
         clearSvcCounterStats(pSvcCounter, pSvcTarget);
 #ifdef HAVE_PROMETHEUS_SUPPORT
         auto nhip = pSvcTarget->getIp();
         if (nhip)
             prometheusManager.removeSvcTargetCounter(service.getUUID(), nhip.get());
-=======
-        clearSvcCounterStats(service, pSvcCounter, pSvcTarget);
-#ifdef HAVE_PROMETHEUS_SUPPORT
-        auto nhip = pSvcTarget->getIp();
-        if (nhip) {
-            prometheusManager.removeSvcTargetCounter(service.getUUID(), nhip.get());
-            if (!service.isExternal() && service.isNodePort())
-                prometheusManager.removeSvcTargetCounter("nodeport-"+service.getUUID(), nhip.get());
-        }
->>>>>>> origin/master
 #endif
         pSvcTarget->remove();
     }
@@ -352,53 +268,28 @@ ServiceManager::updateSvcObserverMoDB (const opflexagent::Service& service, bool
         auto scopeItr = svcAttr.find("scope");
         if (scopeItr != svcAttr.end()) {
             pService->setScope(scopeItr->second);
-            updateSvcTargetObserverMoDB(service, true, pService);
+            // For cluster services, create service targets as well
+            if (scopeItr->second == "cluster")
+                updateSvcTargetObserverMoDB(service, true, pService);
         } else
             pService->unsetScope();
 
 #ifdef HAVE_PROMETHEUS_SUPPORT
-<<<<<<< HEAD
             prometheusManager.addNUpdateSvcCounter(service.getUUID(),
                                                    pService->getRxbytes(0),
                                                    pService->getRxpackets(0),
                                                    pService->getTxbytes(0),
                                                    pService->getTxpackets(0),
                                                    svcAttr);
-=======
-        prometheusManager.addNUpdateSvcCounter(service.getUUID(),
-                                               pService->getRxbytes(0),
-                                               pService->getRxpackets(0),
-                                               pService->getTxbytes(0),
-                                               pService->getTxpackets(0),
-                                               svcAttr);
-        if (!service.isExternal() && service.isNodePort()) {
-            prometheusManager.addNUpdateSvcCounter("nodeport-"+service.getUUID(),
-                                               pService->getNodePortRxbytes(0),
-                                               pService->getNodePortRxpackets(0),
-                                               pService->getNodePortTxbytes(0),
-                                               pService->getNodePortTxpackets(0),
-                                               svcAttr, true);
-        } else {
-            // cluster/nodeport service pods are a superset of the external LB
-            // service pods. We create nodeport metrics only for cluster services.
-            // If a service moves from cluster => external, then remove these metrics.
-            // This is not expected to happen, but keeping the agent generic.
-            prometheusManager.removeSvcCounter("nodeport-"+service.getUUID());
-        }
->>>>>>> origin/master
 #endif
     } else {
         if (opService) {
+            // For external services, svc target removal will be noop
             updateSvcTargetObserverMoDB(service, false, opService.get());
             opService.get()->remove();
 #ifdef HAVE_PROMETHEUS_SUPPORT
             prometheusManager.decSvcCounter();
             prometheusManager.removeSvcCounter(service.getUUID());
-<<<<<<< HEAD
-=======
-            if (!service.isExternal() && service.isNodePort())
-                prometheusManager.removeSvcCounter("nodeport-"+service.getUUID());
->>>>>>> origin/master
 #endif
         }
     }
@@ -463,16 +354,6 @@ ServiceManager::updateConfigMoDB (const opflexagent::Service& service, bool add)
         else
             pService->unsetMode();
 
-        Service::ServiceType type = service.getServiceType();
-        if (type == Service::ServiceType::CLUSTER_IP)
-            pService->setType(ServiceTypeEnumT::CONST_CLUSTERIP);
-        else if (type == Service::ServiceType::NODE_PORT)
-            pService->setType(ServiceTypeEnumT::CONST_NODEPORT);
-        else if (type == Service::ServiceType::LOAD_BALANCER)
-            pService->setType(ServiceTypeEnumT::CONST_LOADBALANCER);
-        else
-            pService->setType(ServiceTypeEnumT::CONST_UNKNOWN);
-
         const optional<uint16_t>& ifaceVlan = service.getIfaceVlan();
         if (ifaceVlan) {
             pService->setInterfaceEncapType(EncapTypeEnumT::CONST_VLAN);
@@ -509,12 +390,6 @@ ServiceManager::updateConfigMoDB (const opflexagent::Service& service, bool add)
                     pSM->setNexthopPort(nhPort.get());
                 else
                     pSM->unsetNexthopPort();
-
-                const auto& nodePort = sm.getNodePort();
-                if (nodePort)
-                    pSM->setNodePort(nodePort.get());
-                else
-                    pSM->unsetNodePort();
 
                 const auto& gwIP = sm.getGatewayIP();
                 if (gwIP)

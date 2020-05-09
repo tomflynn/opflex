@@ -53,7 +53,7 @@ class MessageFactory {
      * @return Inbound message
      */
     static yajr::rpc::InboundMessage * getInboundMessage(
-            yajr::Peer& peer,
+            yajr::Peer const & peer,
             rapidjson::Document const & doc);
 
     /**
@@ -66,22 +66,22 @@ class MessageFactory {
   private:
 
     static yajr::rpc::InboundMessage * InboundMessage(
-            yajr::Peer& peer,
+            yajr::Peer const & peer,
             rapidjson::Document const & doc);
 
     static yajr::rpc::InboundRequest * InboundRequest(
-            yajr::Peer& peer,
+            yajr::Peer const & peer,
             rapidjson::Value const & params,
             char const * method,
             rapidjson::Value const & id);
 
     static yajr::rpc::InboundResult * InboundResult(
-            yajr::Peer& peer,
+            yajr::Peer const & peer,
             rapidjson::Value const & result,
             rapidjson::Value const & id);
 
     static yajr::rpc::InboundError * InboundError(
-            yajr::Peer& peer,
+            yajr::Peer const & peer,
             rapidjson::Value const & error,
             rapidjson::Value const & id);
 

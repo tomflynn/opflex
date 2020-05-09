@@ -141,8 +141,7 @@ bool is_link_local(const boost::asio::ip::address& addr) {
     return false;
 }
 
-bool cidr_from_string(const std::string& cidrStr, cidr_t& cidr,
-                      bool do_mask_addr /*=true */) {
+bool cidr_from_string(const std::string& cidrStr, cidr_t& cidr) {
     std::vector<std::string> parts;
     uint8_t prefixLen = 32;
 
@@ -160,8 +159,7 @@ bool cidr_from_string(const std::string& cidrStr, cidr_t& cidr,
         } catch (const boost::bad_lexical_cast& ex) {
             return false;
         }
-        if (do_mask_addr)
-            baseIp = mask_address(baseIp, prefixLen);
+        baseIp = mask_address(baseIp, prefixLen);
     } else if (baseIp.is_v6()) {
         prefixLen = 128;
     }

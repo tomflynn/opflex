@@ -46,7 +46,7 @@ class Transport {
         /** read cb */
         uv_read_cb  onRead_;
         /** send cb */
-        int (*sendCb_)(comms::internal::CommunicationPeer *);
+        int (*sendCb_)(comms::internal::CommunicationPeer const *);
         /** on sent cb */
         void (*onSent_)(comms::internal::CommunicationPeer const *);
         /** delete cb */
@@ -113,7 +113,7 @@ struct Cb {
      * libuv send cb
      * @return rc
      */
-    static int send_cb(comms::internal::CommunicationPeer *);
+    static int send_cb(comms::internal::CommunicationPeer const *);
     /**
      * on_sent cb
      */

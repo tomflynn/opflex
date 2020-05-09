@@ -22,7 +22,6 @@
 #include <rapidjson/document.h>
 #include <uv.h>
 
-#include <boost/atomic.hpp>
 #include <boost/intrusive/list.hpp>
 
 #include <sstream>  /* for basic_stringstream<> */
@@ -54,7 +53,11 @@ std::vector<iovec> get_iovec(Iterator from, Iterator to) {
         ++addr;
         ++from;
 
-        if (((addr) != &*from) || (from == to)) {
+        if (
+                ((addr) != &*from)
+              ||
+                (from == to)
+           ) {
             iovec i = {
                 const_cast< void * >(static_cast< void const * >(base)),
                 static_cast<size_t>(static_cast< char const * >(addr)
@@ -64,13 +67,16 @@ std::vector<iovec> get_iovec(Iterator from, Iterator to) {
             iov.push_back(i);
             addr = base = &*from;
         }
+
     }
-    iovec i = {
-        const_cast< void * >(static_cast< void const * >(base)),
-        static_cast<size_t>(static_cast< char const * >(addr) -
-          static_cast< char const * >(base))
-    };
-    if (i.iov_len) iov.push_back(i);
+            iovec i = {
+                const_cast< void * >(static_cast< void const * >(base)),
+                static_cast<size_t>(static_cast< char const * >(addr)
+                                    -
+                                    static_cast< char const * >(base))
+            };
+            if (i.iov_len) iov.push_back(i);
+
     return iov;
 }
 
@@ -88,6 +94,7 @@ void on_passive_connection(uv_stream_t * server_handle, int status);
 int connect_to_next_address(ActiveTcpPeer * peer, bool swap_stack = true);
 void on_active_connection(uv_connect_t *req, int status);
 void on_resolved(uv_getaddrinfo_t * req, int status, struct addrinfo *resp);
+
 
 typedef ::boost::intrusive::list_base_hook<
     ::boost::intrusive::link_mode< ::boost::intrusive::auto_unlink> >
@@ -424,7 +431,7 @@ class Peer : public SafeListBaseHook {
      */
     ::yajr::Peer::UvLoopSelector uvLoopSelector_;
     /** reference count */
-    boost::atomic<unsigned int>  uvRefCnt_;
+    unsigned int  uvRefCnt_;
     /** Is this peer connected */
     unsigned char connected_  :1;
     /** Is the peer begin destroyed */
@@ -479,6 +486,26 @@ class CommunicationPeer : public Peer, virtual public ::yajr::Peer {
         std::ostream& os,
         ::yajr::comms::internal::Peer const * p
     );
+
+    template< typename E >
+    friend
+    int
+    transport::Cb< E >::send_cb(CommunicationPeer const *);
+
+    template< typename E >
+    friend
+    void
+    transport::Cb< E >::on_sent(CommunicationPeer const *);
+
+    template< typename E >
+    friend
+    void
+    transport::Cb< E >::on_read(uv_stream_t *, ssize_t, uv_buf_t const *);
+
+    template< typename E >
+    friend
+    struct
+    transport::Cb< E >::StaticHelpers;
 
   public:
 
@@ -543,7 +570,7 @@ class CommunicationPeer : public Peer, virtual public ::yajr::Peer {
      * Write to peer
      * @return rc
      */
-    int write();
+    int write() const;
 
     /**
      * Write iovec to peer
@@ -595,30 +622,6 @@ class CommunicationPeer : public Peer, virtual public ::yajr::Peer {
      * Called on timeout
      */
     void timeout();
-
-    /**
-     * Get the pending bytes
-     * @return pending bytes
-     */
-    size_t getPendingBytes() const {
-        return pendingBytes_;
-    };
-
-    /**
-     * Set the pending bytes
-     * @return pending bytes
-     */
-    void setPendingBytes(size_t pendingBytes) const {
-        pendingBytes_ = pendingBytes;
-    };
-
-    /**
-     * Returns a reference to the underlying string queue
-     * @return string queue
-     */
-    ::yajr::internal::StringQueue& getStringQueue() const {
-        return s_;
-    };
 
     /**
      * Get the id to use for the next message we send to this peer.
@@ -776,18 +779,6 @@ class CommunicationPeer : public Peer, virtual public ::yajr::Peer {
 
         return &transport_;
     }
-
-    /**
-     * Read buffer
-     * @param buffer buffer
-     * @param nread number of bytes to read
-     * @param canWriteJustPastTheEnd can write past the end
-     */
-    void readBuffer(
-            char * buffer,
-            size_t nread,
-            bool canWriteJustPastTheEnd = false);
-
   protected:
     /* don't leak memory! */
     virtual ~CommunicationPeer() {}
@@ -821,11 +812,16 @@ class CommunicationPeer : public Peer, virtual public ::yajr::Peer {
         ssIn_.copyfmt(initialFmt);
     }
 
-    yajr::rpc::InboundMessage * parseFrame();
+    yajr::rpc::InboundMessage * parseFrame() const;
 
     void readBufferZ(
             char const * bufferZ,
-            size_t n);
+            size_t n) const;
+
+    void readBuffer(
+            char * buffer,
+            size_t nread,
+            bool canWriteJustPastTheEnd = false) const;
 
     size_t readChunk(char const * buffer) const {
         ssize_t chunk_size = - ssIn_.tellp();

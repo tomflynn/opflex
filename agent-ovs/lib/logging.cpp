@@ -68,7 +68,6 @@ public:
                const char *functionName, const std::string& message) {
         const char *levelStr = LEVEL_STR_DEBUG;
         switch (level) {
-        case TRACE:   levelStr = LEVEL_STR_TRACE; break;
         case DEBUG:   levelStr = LEVEL_STR_DEBUG; break;
         case INFO:    levelStr = LEVEL_STR_INFO; break;
         case WARNING: levelStr = LEVEL_STR_WARNING; break;
@@ -85,7 +84,6 @@ private:
     std::fstream fileStream;
     std::ostream *out;
     std::mutex logMtx;
-    static const char * LEVEL_STR_TRACE;
     static const char * LEVEL_STR_DEBUG;
     static const char * LEVEL_STR_INFO;
     static const char * LEVEL_STR_WARNING;
@@ -93,7 +91,6 @@ private:
     static const char * LEVEL_STR_FATAL;
 };
 
-const char * OStreamLogSink::LEVEL_STR_TRACE = "trace";
 const char * OStreamLogSink::LEVEL_STR_DEBUG = "debug";
 const char * OStreamLogSink::LEVEL_STR_INFO = "info";
 const char * OStreamLogSink::LEVEL_STR_WARNING = "warning";
@@ -116,8 +113,6 @@ public:
                const char *functionName, const std::string& message) {
         int priority = LOG_DEBUG;
         switch (level) {
-        // No level lower than LOG_DEBUG in syslog
-        case TRACE:   // fall through
         case DEBUG:   priority = LOG_DEBUG; break;
         case INFO:    priority = LOG_INFO; break;
         case WARNING: priority = LOG_WARNING; break;
@@ -179,9 +174,15 @@ void setLoggingLevel(const std::string& newLevelstr) {
     } else if (levelstr == "debug5") {
         level = OFLogHandler::DEBUG5;
         logLevel = DEBUG;
+    } else if (levelstr == "debug6") {
+        level = OFLogHandler::DEBUG6;
+        logLevel = DEBUG;
+    } else if (levelstr == "debug7") {
+        level = OFLogHandler::DEBUG7;
+        logLevel = DEBUG;
     } else if (levelstr == "trace") {
         level = OFLogHandler::TRACE;
-        logLevel = TRACE;
+        logLevel = DEBUG;
     } else if (levelstr == "info") {
         level = OFLogHandler::INFO;
         logLevel = INFO;

@@ -33,12 +33,18 @@ public:
      * called when span session has been deleted
      * @param[in] seSt shared pointer to SessionState object
      */
-    virtual void spanDeleted(const shared_ptr<SessionState>& seSt) = 0;
+    virtual void spanDeleted(shared_ptr<SessionState> seSt) {};
 
     /**
      * Called when span objects are updated.
      */
-     virtual void spanUpdated(const opflex::modb::URI&) = 0;
+     virtual void spanUpdated(const opflex::modb::URI&) {};
+
+     /**
+      * delete all span config
+      */
+     virtual void spanDeleted() {};
+
 };
 }
 #endif // OPFLEX_SPANLISTENER_H

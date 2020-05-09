@@ -31,16 +31,16 @@ TransportEngine< PlainText > & PlainText::getPlainTextTransport() {
 }
 
 template<>
-int Cb< PlainText >::send_cb(CommunicationPeer * peer) {
+int Cb< PlainText >::send_cb(CommunicationPeer const * peer) {
 
     VLOG(5)
         << peer
     ;
 
-    assert(!peer->getPendingBytes());
-    peer->setPendingBytes(peer->getStringQueue().deque_.size());
+    assert(!peer->pendingBytes_);
+    peer->pendingBytes_ = peer->s_.deque_.size();
 
-    if (!peer->getPendingBytes()) {
+    if (!peer->pendingBytes_) {
         /* great success! */
         VLOG(4)
             << "Nothing left to be sent!"
@@ -51,8 +51,8 @@ int Cb< PlainText >::send_cb(CommunicationPeer * peer) {
 
     std::vector<iovec> iov =
         ::yajr::comms::internal::get_iovec(
-                peer->getStringQueue().deque_.begin(),
-                peer->getStringQueue().deque_.end()
+                peer->s_.deque_.begin(),
+                peer->s_.deque_.end()
         );
 
     assert (iov.size());
@@ -62,10 +62,16 @@ int Cb< PlainText >::send_cb(CommunicationPeer * peer) {
 
 template<>
 void Cb< PlainText >::on_sent(CommunicationPeer const * peer) {
-    peer->getStringQueue().deque_.erase(
-            peer->getStringQueue().deque_.begin(),
-            peer->getStringQueue().deque_.begin() + peer->getPendingBytes()
+
+    VLOG(4)
+        << peer
+    ;
+
+    peer->s_.deque_.erase(
+            peer->s_.deque_.begin(),
+            peer->s_.deque_.begin() + peer->pendingBytes_
     );
+
 }
 
 template<>
